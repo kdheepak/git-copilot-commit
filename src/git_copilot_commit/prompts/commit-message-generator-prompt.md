@@ -29,6 +29,7 @@ Your task is to generate a commit message in the [Conventional Commits](https://
 - Lowercase, single word or hyphenated phrase
 - Represents the affected area, module, or file
 - Use broad area if multiple related files are affected
+- Only support a single scope; do not list multiple scopes or use complex paths
 
 ## `<description>`
 
