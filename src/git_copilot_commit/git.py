@@ -226,13 +226,19 @@ class GitRepository:
         else:
             self._run_git_command(["reset", "HEAD"] + paths)
 
-    def commit(self, message: str | None = None, use_editor: bool = False) -> str:
+    def commit(
+        self,
+        message: str | None = None,
+        use_editor: bool = False,
+        no_verify: bool = False,
+    ) -> str:
         """
         Create a commit with the given message or using git's editor.
 
         Args:
             message: Commit message. Used as template if use_editor is True.
             use_editor: Whether to use git's configured editor.
+            no_verify: Skip pre-commit and commit-msg hooks (git commit -n).
 
         Returns:
             Commit SHA.
@@ -253,7 +259,10 @@ class GitRepository:
                 temp_file = f.name
 
             try:
-                args = ["commit", "-e", "-F", temp_file]
+                args = ["commit"]
+                if no_verify:
+                    args.append("-n")
+                args.extend(["-e", "-F", temp_file])
 
                 # Run interactively without capturing output
                 cmd = ["git"] + args
@@ -273,7 +282,10 @@ class GitRepository:
         else:
             if message is None:
                 raise ValueError("message is required when use_editor is False")
-            args = ["commit", "-m", message]
+            args = ["commit"]
+            if no_verify:
+                args.append("-n")
+            args.extend(["-m", message])
 
             self._run_git_command(args)
 

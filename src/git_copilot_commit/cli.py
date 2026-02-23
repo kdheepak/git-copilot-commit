@@ -165,6 +165,27 @@ def generate_commit_message(
         return ask(fallback_prompt, model=model)
 
 
+def commit_with_retry_no_verify(
+    repo: GitRepository, message: str, use_editor: bool = False
+) -> str:
+    """Run commit and offer one retry with -n on failure."""
+    try:
+        return repo.commit(message, use_editor=use_editor)
+    except GitError as e:
+        console.print(f"[red]Commit failed: {e}[/red]")
+        if not Confirm.ask(
+            "Retry commit with [bold]`-n`[/] (skip hooks) using the same commit message?",
+            default=True,
+        ):
+            raise typer.Exit(1)
+
+    try:
+        return repo.commit(message, use_editor=use_editor, no_verify=True)
+    except GitError as retry_error:
+        console.print(f"[red]Commit with -n failed: {retry_error}[/red]")
+        raise typer.Exit(1)
+
+
 @app.command()
 def commit(
     all_files: bool = typer.Option(
@@ -255,11 +276,7 @@ def commit(
     # Confirm commit or edit message (skip if --yes flag is used)
     if yes:
         # Automatically commit with generated message
-        try:
-            commit_sha = repo.commit(commit_message)
-        except GitError as e:
-            console.print(f"[red]Commit failed: {e}[/red]")
-            raise typer.Exit(1)
+        commit_sha = commit_with_retry_no_verify(repo, commit_message)
     else:
         choice = typer.prompt(
             "Choose action: (c)ommit, (e)dit message, (q)uit",
@@ -273,18 +290,12 @@ def commit(
         elif choice == "e":
             # Use git's built-in editor with generated message as template
             console.print("[cyan]Opening git editor...[/cyan]")
-            try:
-                commit_sha = repo.commit(commit_message, use_editor=True)
-            except GitError as e:
-                console.print(f"[red]Commit failed: {e}[/red]")
-                raise typer.Exit(1)
+            commit_sha = commit_with_retry_no_verify(
+                repo, commit_message, use_editor=True
+            )
         elif choice == "c":
             # Commit with generated message
-            try:
-                commit_sha = repo.commit(commit_message)
-            except GitError as e:
-                console.print(f"[red]Commit failed: {e}[/red]")
-                raise typer.Exit(1)
+            commit_sha = commit_with_retry_no_verify(repo, commit_message)
         else:
             console.print("Invalid choice. Commit cancelled.")
             raise typer.Exit()
