@@ -20,7 +20,7 @@ class Settings:
 
     def __init__(self):
         from pathlib import Path
-        
+
         self.config_dir = Path(user_config_dir(f"com.kdheepak.{self.APP_NAME}"))
         self.data_dir = Path(user_data_dir(f"com.kdheepak.{self.APP_NAME}"))
         self.cache_dir = Path(user_cache_dir(f"com.kdheepak.{self.APP_NAME}"))

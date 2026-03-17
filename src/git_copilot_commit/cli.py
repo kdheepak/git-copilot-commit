@@ -2,18 +2,21 @@
 git-copilot-commit - AI-powered Git commit assistant
 """
 
-import rich.terminal_theme
-import typer
-from rich.console import Console
-from rich.prompt import Confirm
-from rich.panel import Panel
-import rich
 from pathlib import Path
 
-from litellm import completion
+import httpx
+import rich.terminal_theme
+import rich
+import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm
+
+import litellm
 from .git import GitRepository, GitError, NotAGitRepositoryError
 from .settings import Settings
 from .version import __version__
+from . import github_copilot
 
 console = Console()
 app = typer.Typer(help=__doc__, add_completion=False)
@@ -84,29 +87,6 @@ def load_system_prompt() -> str:
     raise typer.Exit(1)
 
 
-def ask(prompt, model) -> str:
-    response = completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": load_system_prompt()},
-            {"role": "user", "content": prompt},
-        ],
-        extra_headers={
-            "editor-version": "vscode/1.85.1",
-            "Copilot-Integration-Id": "vscode-chat",
-        },
-    )
-    text = response.choices[0].message.content
-    text = text.strip()
-    # Remove triple backticks if they wrap the entire text
-    if text.startswith("```") and text.endswith("```"):
-        text = text[3:-3].strip()
-    # Otherwise remove single backticks if they wrap the entire text
-    elif text.startswith("`") and text.endswith("`"):
-        text = text[1:-1].strip()
-    return text
-
-
 def generate_commit_message(
     repo: GitRepository, model: str | None = None, context: str = ""
 ) -> str:
@@ -134,35 +114,12 @@ def generate_commit_message(
     prompt = "\n".join(prompt_parts)
 
     if model is None:
-        model = "github_copilot/gpt-4"
+        model = "gpt-5.1-codex"
 
-    if not model.startswith("github_copilot/"):
-        model = f"github_copilot/{model}"
+    if model.startswith("github_copilot/"):
+        model = model.replace("github_copilot/", "")
 
-    try:
-        return ask(prompt, model=model)
-    except Exception as _:
-        console.print(
-            "Prompt failed, falling back to simpler commit message generation."
-        )
-
-        fallback_prompt_parts = [
-            "`git status`:\n",
-            f"```\n{status.get_porcelain_output()}\n```",
-        ]
-
-        if context.strip():
-            fallback_prompt_parts.insert(
-                0, f"User-provided context:\n\n{context.strip()}\n\n"
-            )
-
-        fallback_prompt_parts.append(
-            "\nGenerate a conventional commit message based on the git status above:"
-        )
-
-        fallback_prompt = "\n".join(fallback_prompt_parts)
-
-        return ask(fallback_prompt, model=model)
+    return github_copilot.ask(prompt, model=model)
 
 
 def commit_with_retry_no_verify(
@@ -212,6 +169,14 @@ def commit(
     except NotAGitRepositoryError:
         console.print("[red]Error: Not in a git repository[/red]")
         raise typer.Exit(1)
+
+    try:
+        existing_credentials = github_copilot.load_credentials()
+    except Exception as _:
+        existing_credentials = None
+
+    if existing_credentials is None:
+        github_copilot.login()
 
     # Load settings and use default model if none provided
     settings = Settings()
@@ -302,37 +267,6 @@ def commit(
 
     # Show success message
     console.print(f"[green]✓ Successfully committed: {commit_sha[:8]}[/green]")
-
-
-@app.command()
-def config(
-    set_default_model: str | None = typer.Option(
-        None, "--set-default-model", help="Set default model for commit messages"
-    ),
-    show: bool = typer.Option(False, "--show", help="Show current configuration"),
-):
-    """Manage application configuration."""
-    settings = Settings()
-
-    if set_default_model:
-        settings.default_model = set_default_model
-        console.print(f"[green]✓ Default model set to: {set_default_model}[/green]")
-
-    if show or (not set_default_model):
-        console.print("\n[bold]Current Configuration:[/bold]")
-        default_model = settings.default_model
-        if default_model:
-            console.print(f"Default model: [cyan]{default_model}[/cyan]")
-        else:
-            console.print("Default model: [dim]not set[/dim]")
-
-        active_prompt = get_active_prompt_path()
-        if active_prompt:
-            console.print(f"Active prompt file: [cyan]{active_prompt}[/cyan]")
-        else:
-            console.print("Active prompt file: [red]not found[/red]")
-
-        console.print(f"Config file: [dim]{settings.config_file}[/dim]")
 
 
 if __name__ == "__main__":
