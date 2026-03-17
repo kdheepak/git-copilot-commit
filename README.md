@@ -91,44 +91,6 @@ Options:
   --help            Show this message and exit.
 ```
 
-### Authenticate
-
-```bash
-$ uvx git-copilot-commit authenticate --help
-Usage: git-copilot-commit authenticate [OPTIONS]
-
-  Autheticate with GitHub Copilot.
-
-Options:
-  --help  Show this message and exit.
-```
-
-### List models
-
-```bash
-$ uvx git-copilot-commit models --help
-Usage: git-copilot-commit models [OPTIONS]
-
-  List models available for chat in a table.
-
-Options:
-  --help  Show this message and exit.
-```
-
-### Configure
-
-```bash
-$ uvx git-copilot-commit config --help
-Usage: git-copilot-commit config [OPTIONS]
-
-  Manage application configuration.
-
-Options:
-  --set-default-model TEXT  Set default model for commit messages
-  --show                    Show current configuration
-  --help                    Show this message and exit.
-```
-
 ## Examples
 
 Commit all changes:
@@ -146,14 +108,6 @@ uvx git-copilot-commit commit --yes
 Use a specific model:
 
 ```bash
-uvx git-copilot-commit commit --model claude-3.5-sonnet
-```
-
-Set and use a default model:
-
-```bash
-uvx git-copilot-commit config --set-default-model gpt-4o
-uvx git-copilot-commit commit
 uvx git-copilot-commit commit --model claude-3.5-sonnet
 ```
 
@@ -186,15 +140,23 @@ Add a git alias by adding the following to your `~/.gitconfig`:
     ai-commit = "!f() { uvx git-copilot-commit commit $@; }; f"
 ```
 
-Now you can run:
+Now you can run to review the message before committing:
 
 ```bash
 git ai-commit
+```
+
+Alternatively, you can stage all files and auto accept the commit message and
+specify which model should be used to generate the commit in one CLI invocation.
+
+```bash
 git ai-commit --all --yes --model claude-3.5-sonnet
 ```
 
-Additionally, show more context in diffs by running the following command:
-
-```bash
-git config --global diff.context 3
-```
+> [!TIP]
+>
+> Show more context in diffs by running the following command:
+>
+> ```bash
+> git config --global diff.context 3
+> ```
