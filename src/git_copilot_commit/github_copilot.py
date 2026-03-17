@@ -8,6 +8,7 @@ import secrets
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-APP_NAME = "git-copilot-commit"
+APP_NAME = "github-copilot-commit"
 DEFAULT_GITHUB_DOMAIN = "github.com"
 USER_AGENT = "GitHubCopilotChat/0.35.0"
 EDITOR_VERSION = "vscode/1.107.0"
@@ -28,6 +29,23 @@ CLIENT_ID = base64.b64decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=").decode()
 INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2
 SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4
 DEFAULT_MODEL_ID = "gpt-5.3-codex"
+DEFAULT_MODEL_PREFERENCES = (
+    "gpt-5.3-codex",
+    "gpt-5.4",
+    "claude-opus-4.6",
+    "claude-opus-4.5",
+    "claude-sonnet-4.6",
+    "claude-sonnet-4.5",
+    "gemini-2.5-pro",
+    "gpt-4.1",
+    "gpt-4o",
+)
+
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help="General-purpose GitHub Copilot CLI.",
+)
 
 console = Console()
 console_err = Console(stderr=True)
@@ -133,6 +151,42 @@ class CopilotModel:
         )
 
 
+@dataclass(slots=True)
+class GitHubViewer:
+    login: str
+    name: str | None = None
+    html_url: str | None = None
+    account_type: str | None = None
+    plan_name: str | None = None
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "GitHubViewer":
+        login = payload.get("login")
+        name = payload.get("name")
+        html_url = payload.get("html_url")
+        account_type = payload.get("type")
+        plan = payload.get("plan")
+
+        if not isinstance(login, str) or not login:
+            raise CopilotError("GitHub user endpoint did not return a login.")
+
+        plan_name: str | None = None
+        if isinstance(plan, dict):
+            raw_plan_name = plan.get("name")
+            if isinstance(raw_plan_name, str) and raw_plan_name:
+                plan_name = raw_plan_name
+
+        return cls(
+            login=login,
+            name=name if isinstance(name, str) and name else None,
+            html_url=html_url if isinstance(html_url, str) and html_url else None,
+            account_type=(
+                account_type if isinstance(account_type, str) and account_type else None
+            ),
+            plan_name=plan_name,
+        )
+
+
 def xdg_data_home() -> Path:
     value = os.environ.get("XDG_DATA_HOME")
     if value:
@@ -173,6 +227,12 @@ def get_urls(domain: str) -> dict[str, str]:
         "access_token_url": f"https://{domain}/login/oauth/access_token",
         "copilot_token_url": f"https://api.{domain}/copilot_internal/v2/token",
     }
+
+
+def get_github_api_base_url(domain: str) -> str:
+    if domain == DEFAULT_GITHUB_DOMAIN:
+        return "https://api.github.com"
+    return f"https://api.{domain}"
 
 
 def get_base_url_from_token(token: str) -> str | None:
@@ -307,7 +367,7 @@ def iter_sse_events(response: httpx.Response, url: str):
 def load_credentials() -> CopilotCredentials | None:
     path = credentials_path()
     if not path.exists():
-        return None
+        return
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -487,10 +547,34 @@ def refresh_copilot_token(
     )
 
 
+def fetch_github_viewer(
+    client: httpx.Client,
+    github_access_token: str,
+    domain: str,
+) -> GitHubViewer:
+    payload = request_json(
+        client,
+        "GET",
+        f"{get_github_api_base_url(domain)}/user",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {github_access_token}",
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    if not isinstance(payload, dict):
+        raise CopilotError("GitHub user endpoint returned an invalid response.")
+
+    return GitHubViewer.from_payload(payload)
+
+
 def ensure_fresh_credentials(client: httpx.Client) -> CopilotCredentials:
     credentials = load_credentials()
     if credentials is None:
-        raise CopilotError("No cached Copilot credentials found.")
+        raise CopilotError(
+            f"No cached Copilot credentials found. Run `{Path(__file__).name} auth login` first."
+        )
 
     if not credentials.is_expired():
         return credentials
@@ -571,6 +655,10 @@ def pick_model(
                 f"Model `{requested_model}` was not returned by Copilot. Available models: {', '.join(model.id for model in models)}"
             )
         return by_id[requested_model]
+
+    for preferred_model in DEFAULT_MODEL_PREFERENCES:
+        if preferred_model in by_id:
+            return by_id[preferred_model]
 
     return models[0]
 
@@ -931,12 +1019,100 @@ def print_model_table(models: list[CopilotModel]) -> None:
     console.print(table)
 
 
-def fail(message: str) -> None:
-    console_err.print(f"[red]Error:[/red] {message}")
-    raise typer.Exit(1)
+def format_relative_duration(delta_seconds: int) -> str:
+    remaining = abs(delta_seconds)
+    units = (
+        ("d", 86_400),
+        ("h", 3_600),
+        ("m", 60),
+        ("s", 1),
+    )
+    parts: list[str] = []
+    for suffix, width in units:
+        if remaining < width and suffix != "s":
+            continue
+        value, remaining = divmod(remaining, width)
+        if value == 0 and suffix != "s":
+            continue
+        parts.append(f"{value}{suffix}")
+        if len(parts) == 2:
+            break
+
+    if not parts:
+        parts.append("0s")
+
+    text = " ".join(parts)
+    if delta_seconds < 0:
+        return f"{text} ago"
+    return f"in {text}"
 
 
-def login(enterprise_domain: str | None = None, force: bool = False) -> None:
+def format_unix_timestamp(timestamp: int) -> str:
+    try:
+        formatted = datetime.fromtimestamp(timestamp).astimezone()
+    except (OSError, OverflowError, ValueError):
+        return str(timestamp)
+
+    delta_seconds = int(timestamp - time.time())
+    return (
+        f"{formatted.strftime('%Y-%m-%d %H:%M:%S %Z')} "
+        f"({format_relative_duration(delta_seconds)})"
+    )
+
+
+def print_login_summary(
+    domain: str,
+    credentials: CopilotCredentials,
+    github_viewer: GitHubViewer | None = None,
+    models: list[CopilotModel] | None = None,
+) -> None:
+    table = Table.grid(padding=(0, 1))
+    table.add_column(style="cyan", no_wrap=True)
+    table.add_column(style="white")
+
+    table.add_row("GitHub host", domain)
+
+    if github_viewer is not None:
+        identity = github_viewer.login
+        if github_viewer.name and github_viewer.name != github_viewer.login:
+            identity = f"{identity} ({github_viewer.name})"
+        table.add_row("GitHub user", identity)
+        if github_viewer.account_type:
+            table.add_row("Account type", github_viewer.account_type)
+        if github_viewer.plan_name:
+            table.add_row("GitHub plan", github_viewer.plan_name)
+        if github_viewer.html_url:
+            table.add_row("GitHub profile", github_viewer.html_url)
+
+    table.add_row("Copilot base URL", credentials.base_url())
+    table.add_row(
+        "Copilot token expires",
+        format_unix_timestamp(credentials.copilot_expires_at),
+    )
+
+    if models is not None:
+        default_model = pick_model(models)
+        table.add_row("Available models", str(len(models)))
+        table.add_row(
+            "Default model",
+            f"{default_model.id} ({infer_api_surface(default_model)})",
+        )
+
+    console.print(Panel.fit(table, title="Login Summary"))
+
+
+def login(
+    enterprise_domain: str | None = typer.Option(
+        None,
+        "--enterprise-domain",
+        help="GitHub Enterprise hostname. Omit for github.com.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Replace any cached Copilot credentials without prompting.",
+    ),
+) -> None:
     """Authenticate with GitHub and cache Copilot credentials locally."""
     normalized_domain = normalize_domain(enterprise_domain)
     if enterprise_domain and not normalized_domain:
@@ -972,9 +1148,29 @@ def login(enterprise_domain: str | None = None, force: bool = False) -> None:
             client, github_access_token, normalized_domain
         )
         path = save_credentials(credentials)
+        github_viewer: GitHubViewer | None = None
+        available_models: list[CopilotModel] | None = None
+        warnings: list[str] = []
+
+        try:
+            github_viewer = fetch_github_viewer(client, github_access_token, domain)
+        except CopilotError as exc:
+            warnings.append(f"Could not fetch GitHub account details: {exc}")
+
+        try:
+            available_models = list_models(client, credentials)
+        except CopilotError as exc:
+            warnings.append(f"Could not fetch Copilot model summary: {exc}")
 
     console.print(f"[green]Saved Copilot credentials to[/green] {path}")
-    console.print(f"[green]Resolved Copilot base URL:[/green] {credentials.base_url()}")
+    print_login_summary(
+        domain,
+        credentials,
+        github_viewer=github_viewer,
+        models=available_models,
+    )
+    for warning in warnings:
+        console.print(f"[yellow]Warning:[/yellow] {warning}")
 
 
 def ask(prompt: str, model: str | None = None) -> str:
