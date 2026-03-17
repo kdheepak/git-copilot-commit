@@ -4,15 +4,12 @@ git-copilot-commit - AI-powered Git commit assistant
 
 from pathlib import Path
 
-import httpx
-import rich.terminal_theme
 import rich
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
 
-import litellm
 from .git import GitRepository, GitError, NotAGitRepositoryError
 from .settings import Settings
 from .version import __version__
