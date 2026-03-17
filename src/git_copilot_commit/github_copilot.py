@@ -251,6 +251,59 @@ def request_json(
         raise CopilotError(f"Invalid JSON response from {url}.") from exc
 
 
+def iter_sse_events(response: httpx.Response, url: str):
+    event_name: str | None = None
+    data_lines: list[str] = []
+
+    def decode_event(raw_data: str, current_event: str | None) -> Any:
+        if raw_data == "[DONE]":
+            return None
+        try:
+            payload = json.loads(raw_data)
+        except json.JSONDecodeError as exc:
+            label = current_event or "message"
+            raise CopilotError(
+                f"Invalid SSE event payload from {url} ({label})."
+            ) from exc
+        if isinstance(payload, dict) and current_event and "type" not in payload:
+            payload = dict(payload)
+            payload["type"] = current_event
+        return payload
+
+    for raw_line in response.iter_lines():
+        line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8")
+        if not line:
+            if data_lines:
+                current_event = event_name
+                raw_data = "\n".join(data_lines)
+                event_name = None
+                data_lines = []
+                payload = decode_event(raw_data, current_event)
+                if payload is not None:
+                    yield payload
+            else:
+                event_name = None
+            continue
+
+        if line.startswith(":"):
+            continue
+
+        field, _, value = line.partition(":")
+        if value.startswith(" "):
+            value = value[1:]
+
+        if field == "event":
+            event_name = value
+            continue
+        if field == "data":
+            data_lines.append(value)
+
+    if data_lines:
+        payload = decode_event("\n".join(data_lines), event_name)
+        if payload is not None:
+            yield payload
+
+
 def load_credentials() -> CopilotCredentials | None:
     path = credentials_path()
     if not path.exists():
@@ -455,10 +508,11 @@ def copilot_request_headers(
     access_token: str,
     *,
     intent: str = "conversation-panel",
+    accept: str = "application/json",
 ) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
+        "Accept": accept,
         "Content-Type": "application/json",
         "User-Agent": USER_AGENT,
         "Editor-Version": EDITOR_VERSION,
@@ -652,7 +706,7 @@ def chat_completion(
                 }
             ],
             "temperature": 0,
-            "max_tokens": 32,
+            "max_tokens": 1024,
             "stream": False,
         },
     )
@@ -672,6 +726,7 @@ def extract_response_text(payload: Any) -> str:
         raise CopilotError("Responses API returned no output.")
 
     parts: list[str] = []
+    refusals: list[str] = []
     for item in output:
         if not isinstance(item, dict):
             continue
@@ -684,12 +739,20 @@ def extract_response_text(payload: Any) -> str:
             text = block.get("text")
             if isinstance(text, str) and text.strip():
                 parts.append(text.strip())
+                continue
+            refusal = block.get("refusal")
+            if isinstance(refusal, str) and refusal.strip():
+                refusals.append(refusal.strip())
 
     joined = "\n".join(parts).strip()
     if joined:
         return joined
 
-    raise CopilotError(f"Responses API output did not contain text: {payload}")
+    joined_refusals = "\n".join(refusals).strip()
+    if joined_refusals:
+        return joined_refusals
+
+    raise CopilotError("Responses API output did not contain text.")
 
 
 def responses_completion(
@@ -699,32 +762,137 @@ def responses_completion(
     model: CopilotModel,
     prompt: str,
 ) -> str:
-    payload = request_json(
-        client,
-        "POST",
-        f"{credentials.base_url()}/responses",
-        headers=copilot_request_headers(
-            credentials.copilot_token, intent="conversation-edits"
-        ),
-        json_body={
-            "model": model.id,
-            "input": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": prompt,
-                        }
-                    ],
-                }
-            ],
-            "stream": False,
-            "store": False,
-            "max_output_tokens": 1024,
-        },
-    )
-    return extract_response_text(payload)
+    url = f"{credentials.base_url()}/responses"
+    request_body = {
+        "model": model.id,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": prompt,
+                    }
+                ],
+            }
+        ],
+        "stream": True,
+        "store": False,
+    }
+
+    text_parts: list[str] = []
+    final_response: dict[str, Any] | None = None
+
+    try:
+        with client.stream(
+            "POST",
+            url,
+            headers=copilot_request_headers(
+                credentials.copilot_token,
+                intent="conversation-edits",
+                accept="text/event-stream",
+            ),
+            json=request_body,
+        ) as response:
+            if response.is_error:
+                detail = response.read().decode("utf-8", errors="replace").strip()
+                if len(detail) > 400:
+                    detail = f"{detail[:397]}..."
+                suffix = f": {detail}" if detail else ""
+                raise CopilotError(
+                    f"{response.status_code} {response.reason_phrase}{suffix}"
+                )
+
+            content_type = response.headers.get("content-type", "")
+            if "text/event-stream" not in content_type:
+                body = response.read()
+                try:
+                    payload = json.loads(body)
+                except ValueError as exc:
+                    detail = body.decode("utf-8", errors="replace").strip()
+                    if len(detail) > 400:
+                        detail = f"{detail[:397]}..."
+                    raise CopilotError(
+                        f"Expected an SSE stream from {url}, got {content_type or 'unknown content type'}: {detail}"
+                    ) from exc
+                return extract_response_text(payload)
+
+            for event in iter_sse_events(response, url):
+                if not isinstance(event, dict):
+                    continue
+
+                event_type = event.get("type")
+                if event_type == "response.output_text.delta":
+                    delta = event.get("delta")
+                    if isinstance(delta, str) and delta:
+                        text_parts.append(delta)
+                    continue
+
+                if event_type == "response.output_text.done" and not text_parts:
+                    text = event.get("text")
+                    if isinstance(text, str) and text.strip():
+                        text_parts.append(text)
+                    continue
+
+                if event_type == "error":
+                    error = event.get("error")
+                    if isinstance(error, dict):
+                        message = error.get("message")
+                        code = error.get("code")
+                        if isinstance(message, str) and message.strip():
+                            prefix = (
+                                f"{code}: " if isinstance(code, str) and code else ""
+                            )
+                            raise CopilotError(
+                                f"Responses stream error: {prefix}{message.strip()}"
+                            )
+                    raise CopilotError("Responses stream returned an error event.")
+
+                if event_type in {
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                }:
+                    response_payload = event.get("response")
+                    if isinstance(response_payload, dict):
+                        final_response = response_payload
+    except httpx.HTTPError as exc:
+        raise CopilotError(f"Request failed for {url}: {exc}") from exc
+
+    text = "".join(text_parts).strip()
+    if final_response is None:
+        if text:
+            return text
+        raise CopilotError("Responses stream ended without a terminal response event.")
+
+    status = final_response.get("status")
+    if status == "failed":
+        error = final_response.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            code = error.get("code")
+            if isinstance(message, str) and message.strip():
+                prefix = f"{code}: " if isinstance(code, str) and code else ""
+                raise CopilotError(
+                    f"Responses API request failed: {prefix}{message.strip()}"
+                )
+        raise CopilotError("Responses API request failed.")
+
+    if status == "incomplete":
+        details = final_response.get("incomplete_details")
+        reason = "unknown"
+        if isinstance(details, dict):
+            raw_reason = details.get("reason")
+            if isinstance(raw_reason, str) and raw_reason.strip():
+                reason = raw_reason.strip()
+        if text:
+            return f"{text}\n\n[Response incomplete: {reason}]"
+        raise CopilotError(f"Responses API response was incomplete: {reason}.")
+
+    if text:
+        return text
+
+    return extract_response_text(final_response)
 
 
 def complete_text_prompt(
