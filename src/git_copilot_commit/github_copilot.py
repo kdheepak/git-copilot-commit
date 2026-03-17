@@ -1101,18 +1101,7 @@ def print_login_summary(
     console.print(Panel.fit(table, title="Login Summary"))
 
 
-def login(
-    enterprise_domain: str | None = typer.Option(
-        None,
-        "--enterprise-domain",
-        help="GitHub Enterprise hostname. Omit for github.com.",
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        help="Replace any cached Copilot credentials without prompting.",
-    ),
-) -> None:
+def login(enterprise_domain: str | None = None, force: bool = False) -> None:
     """Authenticate with GitHub and cache Copilot credentials locally."""
     normalized_domain = normalize_domain(enterprise_domain)
     if enterprise_domain and not normalized_domain:
