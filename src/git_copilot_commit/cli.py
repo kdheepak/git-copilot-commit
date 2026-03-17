@@ -116,7 +116,18 @@ def generate_commit_message(
     if model.startswith("github_copilot/"):
         model = model.replace("github_copilot/", "")
 
-    return github_copilot.ask(prompt, model=model)
+    return github_copilot.ask(
+        f"""
+# System Prompt
+
+{load_system_prompt()}
+
+# Prompt
+
+{prompt}
+            """,
+        model=model,
+    )
 
 
 def commit_with_retry_no_verify(
