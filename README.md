@@ -125,12 +125,6 @@ Split staged hunks into separate commits:
 uvx git-copilot-commit commit --split
 ```
 
-Only split automatically when the staged changes look broad or mixed enough:
-
-```bash
-uvx git-copilot-commit commit --split=auto
-```
-
 Prefer up to two commits:
 
 ```bash
