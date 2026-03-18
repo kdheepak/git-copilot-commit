@@ -1,20 +1,30 @@
 from unittest.mock import Mock
+from pathlib import Path
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
 import git_copilot_commit.cli as cli
 from git_copilot_commit import github_copilot
 from git_copilot_commit.cli import (
     PreparedSplitCommit,
+    build_http_client_config,
     build_commit_message_prompt,
+    commit_with_retry_no_verify,
     display_selected_model,
     display_split_commit_plan,
     execute_split_commit_plan,
     generate_commit_message_for_status,
+    handle_split_commit_flow,
+    load_named_prompt,
+    load_system_prompt,
+    normalize_model_name,
     print_copilot_error,
+    resolve_prompt_file,
     resolve_split_commit_limit,
     SPLIT_DIFF_ARGS,
+    stage_changes_for_commit,
 )
 from git_copilot_commit.git import GitFile, GitStatus
 from git_copilot_commit.split_commits import (
@@ -24,6 +34,8 @@ from git_copilot_commit.split_commits import (
     SplitPlanCommit,
     extract_patch_units,
 )
+
+runner = CliRunner()
 
 
 def make_status(staged_diff: str, unstaged_diff: str = "") -> GitStatus:
@@ -202,6 +214,167 @@ def test_display_selected_model_shows_resolved_model(
     )
 
 
+def test_cli_version_flag_prints_version() -> None:
+    result = runner.invoke(cli.app, ["--version"])
+
+    assert result.exit_code == 0
+    assert "git-copilot-commit" in result.stdout
+
+
+def test_build_http_client_config_and_normalize_model_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    config = build_http_client_config(
+        ca_bundle="~/certs/custom.pem",
+        insecure=False,
+        native_tls=True,
+    )
+
+    assert config.ca_bundle == str(tmp_path / "certs" / "custom.pem")
+    assert not config.use_native_tls
+    assert normalize_model_name("github_copilot/gpt-5.4") == "gpt-5.4"
+    assert normalize_model_name("gpt-5.4") == "gpt-5.4"
+    assert normalize_model_name(None) is None
+
+
+def test_load_named_prompt_prefers_first_existing_location(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    user_prompt = tmp_path / "user.md"
+    packaged_prompt = tmp_path / "packaged.md"
+    packaged_prompt.write_text("packaged prompt", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "get_prompt_locations",
+        lambda _filename: [user_prompt, packaged_prompt],
+    )
+
+    assert load_named_prompt("ignored.md") == "packaged prompt"
+
+    user_prompt.write_text("user prompt", encoding="utf-8")
+    assert load_named_prompt("ignored.md") == "user prompt"
+
+
+def test_load_named_prompt_and_resolve_prompt_file_error_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_print = Mock()
+    monkeypatch.setattr(cli.console, "print", mock_print)
+    monkeypatch.setattr(
+        cli,
+        "get_prompt_locations",
+        lambda _filename: [Path("/does/not/exist/one.md"), Path("/does/not/exist/two.md")],
+    )
+
+    with pytest.raises(typer.Exit):
+        load_named_prompt("missing.md")
+
+    class BrokenSettings:
+        config_file = Path("/tmp/config.json")
+
+        @property
+        def default_prompt_file(self) -> str | None:
+            raise ValueError("bad config")
+
+    monkeypatch.setattr(cli, "Settings", BrokenSettings)
+
+    with pytest.raises(typer.Exit):
+        resolve_prompt_file()
+
+    assert mock_print.call_count == 2
+
+
+def test_load_system_prompt_and_resolve_prompt_file_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text("system prompt", encoding="utf-8")
+
+    assert load_system_prompt(prompt_file) == "system prompt"
+
+    class FakeSettings:
+        config_file = tmp_path / "config.json"
+
+        @property
+        def default_prompt_file(self) -> str | None:
+            return "~/prompts/default.md"
+
+    monkeypatch.setattr(cli, "Settings", FakeSettings)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert resolve_prompt_file() == tmp_path / "prompts" / "default.md"
+
+    missing_prompt = tmp_path / "missing.md"
+    with pytest.raises(typer.Exit):
+        load_system_prompt(missing_prompt)
+
+
+def test_commit_with_retry_no_verify_retries_and_can_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = Mock()
+    repo.commit.side_effect = [
+        cli.GitError("pre-commit hook failed"),
+        "abc123",
+    ]
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+
+    assert commit_with_retry_no_verify(repo, "feat: add retry") == "abc123"
+    assert repo.commit.call_args_list[1].kwargs["no_verify"] is True
+
+    aborting_repo = Mock()
+    aborting_repo.commit.side_effect = cli.GitError("pre-commit hook failed")
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=False))
+
+    with pytest.raises(typer.Exit):
+        commit_with_retry_no_verify(aborting_repo, "feat: abort retry")
+
+
+def test_stage_changes_for_commit_stages_requested_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refreshed_status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    repo = Mock()
+    repo.get_status.return_value = refreshed_status
+    repo._run_git_command.return_value.stdout = "git status output"
+
+    status = GitStatus(
+        files=[
+            GitFile(path="src/example.py", status="M", staged_status=" "),
+            GitFile(path="src/new.py", status="?", staged_status="?"),
+        ],
+        staged_diff="",
+        unstaged_diff="diff --git a/src/example.py b/src/example.py\n",
+    )
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(side_effect=[True, True]))
+
+    result = stage_changes_for_commit(repo, status, all_files=False)
+
+    assert result == refreshed_status
+    repo.stage_modified.assert_called_once_with()
+    repo.stage_files.assert_called_once_with()
+
+
+def test_stage_changes_for_commit_all_files_short_circuit() -> None:
+    refreshed_status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    repo = Mock()
+    repo.get_status.return_value = refreshed_status
+
+    result = stage_changes_for_commit(repo, refreshed_status, all_files=True)
+
+    assert result == refreshed_status
+    repo.stage_files.assert_called_once_with()
+
+
 def test_execute_split_commit_plan_creates_multiple_commits(
     git_repo,
     git_repo_path,
@@ -244,3 +417,88 @@ def test_execute_split_commit_plan_creates_multiple_commits(
 
     recent_messages = [message for _, message in git_repo.get_recent_commits(limit=2)]
     assert recent_messages == ["chore: update last line", "chore: update first line"]
+
+
+def test_handle_split_commit_flow_falls_back_to_single_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = Mock()
+    repo.get_staged_diff.return_value = ""
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    fallback = Mock()
+    monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
+    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: [])
+
+    handle_split_commit_flow(repo, status, max_commits=3, model="gpt-5.4")
+
+    fallback.assert_called_once()
+
+
+def test_handle_split_commit_flow_handles_invalid_plan_and_single_commit_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    repo = Mock()
+    repo.get_staged_diff.return_value = "diff"
+    patch_units = (
+        PatchUnit(
+            id="u1",
+            order=0,
+            path="src/example.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 1",
+            summary="summary 1",
+        ),
+        PatchUnit(
+            id="u2",
+            order=1,
+            path="README.md",
+            staged_status="A",
+            kind="new_file",
+            patch="patch 2",
+            summary="summary 2",
+        ),
+    )
+
+    fallback = Mock()
+    monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
+    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(
+        cli,
+        "request_split_commit_plan",
+        Mock(side_effect=cli.SplitPlanningError("bad plan")),
+    )
+
+    handle_split_commit_flow(repo, status, max_commits=3, model="gpt-5.4")
+
+    fallback.assert_called_once()
+
+    monkeypatch.setattr(cli, "request_split_commit_plan", Mock(return_value=Mock()))
+    monkeypatch.setattr(
+        cli,
+        "request_split_commit_messages",
+        Mock(
+            return_value=[
+                PreparedSplitCommit(
+                    message="feat: one commit after planning",
+                    patch_units=patch_units,
+                )
+            ]
+        ),
+    )
+    display_message = Mock()
+    execute_action = Mock(return_value="deadbeefcafefeed")
+    monkeypatch.setattr(cli, "display_commit_message", display_message)
+    monkeypatch.setattr(cli, "execute_commit_action", execute_action)
+    fallback.reset_mock()
+
+    handle_split_commit_flow(repo, status, max_commits=3, model="gpt-5.4")
+
+    fallback.assert_not_called()
+    display_message.assert_called_once_with("feat: one commit after planning")
+    execute_action.assert_called_once()
