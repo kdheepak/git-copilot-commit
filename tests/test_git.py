@@ -1,5 +1,9 @@
 import re
 
+import pytest
+
+from git_copilot_commit.git import GitFile, GitStatus
+
 FIRST_PATCH = """\
 diff --git a/file.txt b/file.txt
 index d68dd40..4f11a6d 100644
@@ -93,3 +97,45 @@ def test_alternate_index_commit_preserves_real_index_and_unstaged_changes(
 
     recent_messages = [message for _, message in git_repo.get_recent_commits(limit=2)]
     assert recent_messages == ["part 2", "part 1"]
+
+
+def test_git_file_and_status_helper_properties() -> None:
+    staged = GitFile(path="staged.py", status=" ", staged_status="M")
+    unstaged = GitFile(path="unstaged.py", status="M", staged_status=" ")
+    untracked = GitFile(path="new.py", status="?", staged_status="?")
+    status = GitStatus(
+        files=[staged, unstaged, untracked],
+        staged_diff="diff --git a/staged.py b/staged.py\n",
+        unstaged_diff="diff --git a/unstaged.py b/unstaged.py\n",
+    )
+
+    assert staged.is_staged
+    assert staged.is_modified
+    assert not staged.is_untracked
+    assert unstaged.is_modified
+    assert untracked.is_untracked
+    assert status.has_staged_changes
+    assert status.has_unstaged_changes
+    assert status.has_untracked_files
+    assert [file.path for file in status.staged_files] == ["staged.py"]
+    assert [file.path for file in status.unstaged_files] == ["unstaged.py"]
+    assert [file.path for file in status.untracked_files] == ["new.py"]
+    assert status.get_porcelain_output() == "M  staged.py\n M unstaged.py\n?? new.py"
+
+
+def test_parse_status_output_build_env_and_commit_validation(git_repo) -> None:
+    parsed = git_repo._parse_status_output("M  staged.py\n M unstaged.py\n?? new.py\n")
+
+    assert [(file.staged_status, file.status, file.path) for file in parsed] == [
+        ("M", " ", "staged.py"),
+        (" ", "M", "unstaged.py"),
+        ("?", "?", "new.py"),
+    ]
+
+    merged_env = git_repo._build_env({"CUSTOM_ENV": "1"})
+    assert merged_env is not None
+    assert merged_env["CUSTOM_ENV"] == "1"
+    assert git_repo._build_env(None) is None
+
+    with pytest.raises(ValueError):
+        git_repo.commit(None)
