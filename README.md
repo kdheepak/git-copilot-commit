@@ -92,13 +92,9 @@ Usage: git-copilot-commit commit [OPTIONS]
 
 Options:
   -a, --all         Stage all files before committing
-  --split           Split staged hunks into multiple commits when the changes
-                    support it
-  --max-commits INTEGER
-                    Maximum number of commits to generate when using --split
+  --split           Split staged hunks into multiple commits. Use
+                    `--split=N` to prefer up to N commits.
   -m, --model TEXT  Model to use for generating commit message
-  --prompt-file PATH
-                    Path to a Markdown file to use as the system prompt
   -y, --yes         Automatically accept the generated commit message
   --help            Show this message and exit.
 ```
@@ -123,22 +119,22 @@ Use a specific model:
 uvx git-copilot-commit commit --model claude-3.5-sonnet
 ```
 
-Use a custom Markdown system prompt:
-
-```bash
-uvx git-copilot-commit commit --prompt-file /path/to/prompt.md
-```
-
 Split staged hunks into separate commits:
 
 ```bash
 uvx git-copilot-commit commit --split
 ```
 
-Limit split planning to at most two commits:
+Only split automatically when the staged changes look broad or mixed enough:
 
 ```bash
-uvx git-copilot-commit commit --split --max-commits 2
+uvx git-copilot-commit commit --split=auto
+```
+
+Prefer up to two commits:
+
+```bash
+uvx git-copilot-commit commit --split 2
 ```
 
 ## Commit Message Format
