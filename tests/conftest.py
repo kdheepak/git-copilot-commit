@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
+import pytest  # noqa: F401
 from git_copilot_commit.git import GitRepository  # noqa: E402
 
 

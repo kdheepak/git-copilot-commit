@@ -1,6 +1,6 @@
 import re
 
-import pytest
+import pytest  # noqa: F401
 
 from git_copilot_commit.git import GitFile, GitStatus
 

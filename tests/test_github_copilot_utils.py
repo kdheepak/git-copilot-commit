@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
+import pytest  # noqa: F401
 from rich.console import Console
 
 from git_copilot_commit import github_copilot

@@ -1,7 +1,7 @@
 from unittest.mock import Mock
 from pathlib import Path
 
-import pytest
+import pytest  # noqa: F401
 import typer
 from typer.testing import CliRunner
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-import pytest
+import pytest  # noqa: F401
 
 import git_copilot_commit.settings as settings_module
 
