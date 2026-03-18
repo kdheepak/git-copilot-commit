@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import httpx
-import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -40,12 +39,6 @@ DEFAULT_MODEL_PREFERENCES = (
     "gemini-2.5-pro",
     "gpt-4.1",
     "gpt-4o",
-)
-
-app = typer.Typer(
-    add_completion=False,
-    no_args_is_help=True,
-    help="General-purpose GitHub Copilot CLI.",
 )
 
 console = Console()
