@@ -64,6 +64,12 @@ pipx install git-copilot-commit
    uvx git-copilot-commit authenticate
    ```
 
+   If your cached GitHub token is revoked or expires, refresh it with:
+
+   ```bash
+   uvx git-copilot-commit authenticate --force
+   ```
+
 2. Make changes in your repository.
 
 3. Generate and commit:

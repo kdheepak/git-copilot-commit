@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import httpx
 import typer
@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 APP_NAME = "github-copilot-commit"
+CLI_AUTH_COMMAND = "git-copilot-commit authenticate"
 DEFAULT_GITHUB_DOMAIN = "github.com"
 USER_AGENT = "GitHubCopilotChat/0.35.0"
 EDITOR_VERSION = "vscode/1.107.0"
@@ -49,10 +50,22 @@ app = typer.Typer(
 
 console = Console()
 console_err = Console(stderr=True)
+T = TypeVar("T")
 
 
 class CopilotError(RuntimeError):
     pass
+
+
+class CopilotHttpError(CopilotError):
+    def __init__(
+        self, status_code: int, reason_phrase: str, detail: str | None = None
+    ) -> None:
+        self.status_code = status_code
+        self.reason_phrase = reason_phrase
+        self.detail = detail
+        suffix = f": {detail}" if detail else ""
+        super().__init__(f"{status_code} {reason_phrase}{suffix}")
 
 
 @dataclass(slots=True)
@@ -290,8 +303,7 @@ def request_json(
         detail = response.text.strip()
         if len(detail) > 400:
             detail = f"{detail[:397]}..."
-        suffix = f": {detail}" if detail else ""
-        raise CopilotError(f"{response.status_code} {response.reason_phrase}{suffix}")
+        raise CopilotHttpError(response.status_code, response.reason_phrase, detail)
 
     content_type = response.headers.get("content-type", "")
     if "application/json" not in content_type:
@@ -573,7 +585,7 @@ def ensure_fresh_credentials(client: httpx.Client) -> CopilotCredentials:
     credentials = load_credentials()
     if credentials is None:
         raise CopilotError(
-            f"No cached Copilot credentials found. Run `{Path(__file__).name} auth login` first."
+            f"No cached Copilot credentials found. Run `{CLI_AUTH_COMMAND}` first."
         )
 
     if not credentials.is_expired():
@@ -586,6 +598,23 @@ def ensure_fresh_credentials(client: httpx.Client) -> CopilotCredentials:
     )
     save_credentials(refreshed)
     return refreshed
+
+
+def should_reauthenticate(exc: CopilotError) -> bool:
+    if isinstance(exc, CopilotHttpError):
+        return exc.status_code == 401
+
+    message = str(exc)
+    retryable_prefixes = (
+        "No cached Copilot credentials found.",
+        "Cached GitHub access token is missing or invalid.",
+        "Cached Copilot token is missing or invalid.",
+        "Cached Copilot expiration timestamp is missing or invalid.",
+        "Cached enterprise domain is invalid.",
+        "Unable to read cached credentials from ",
+        "Cached credentials in ",
+    )
+    return any(message.startswith(prefix) for prefix in retryable_prefixes)
 
 
 def copilot_request_headers(
@@ -886,9 +915,8 @@ def responses_completion(
                 detail = response.read().decode("utf-8", errors="replace").strip()
                 if len(detail) > 400:
                     detail = f"{detail[:397]}..."
-                suffix = f": {detail}" if detail else ""
-                raise CopilotError(
-                    f"{response.status_code} {response.reason_phrase}{suffix}"
+                raise CopilotHttpError(
+                    response.status_code, response.reason_phrase, detail
                 )
 
             content_type = response.headers.get("content-type", "")
@@ -1107,7 +1135,13 @@ def login(enterprise_domain: str | None = None, force: bool = False) -> None:
     if enterprise_domain and not normalized_domain:
         raise CopilotError("Invalid GitHub Enterprise hostname.")
 
-    existing = load_credentials()
+    existing: CopilotCredentials | None = None
+    try:
+        existing = load_credentials()
+    except CopilotError:
+        if not force:
+            raise
+
     if existing and not force:
         raise CopilotError(
             f"Cached credentials already exist at {credentials_path()}. Re-run with --force to replace them."
@@ -1162,16 +1196,45 @@ def login(enterprise_domain: str | None = None, force: bool = False) -> None:
         console.print(f"[yellow]Warning:[/yellow] {warning}")
 
 
-def ask(prompt: str, model: str | None = None) -> str:
-    """Send a prompt to GitHub Copilot and print the reply."""
+def _ask_once(client: httpx.Client, prompt: str, model: str | None = None) -> str:
+    credentials = ensure_fresh_credentials(client)
+    all_models = list_models(client, credentials)
+
+    selected_model = pick_model(all_models, model)
+    return complete_text_prompt(
+        client,
+        credentials,
+        model=selected_model,
+        prompt=prompt,
+    )
+
+
+def _with_reauthentication(action: Callable[[httpx.Client], T]) -> T:
+    try:
+        with make_http_client() as client:
+            return action(client)
+    except CopilotError as exc:
+        if not should_reauthenticate(exc):
+            raise
+
+    console.print(
+        "[yellow]Cached GitHub Copilot credentials are missing or no longer valid. Starting authentication...[/yellow]"
+    )
+    login(force=True)
+
     with make_http_client() as client:
+        return action(client)
+
+
+def ensure_auth_ready(model: str | None = None) -> None:
+    def validate(client: httpx.Client) -> None:
         credentials = ensure_fresh_credentials(client)
         all_models = list_models(client, credentials)
+        pick_model(all_models, model)
 
-        selected_model = pick_model(all_models, model)
-        return complete_text_prompt(
-            client,
-            credentials,
-            model=selected_model,
-            prompt=prompt,
-        )
+    _with_reauthentication(validate)
+
+
+def ask(prompt: str, model: str | None = None) -> str:
+    """Send a prompt to GitHub Copilot and print the reply."""
+    return _with_reauthentication(lambda client: _ask_once(client, prompt, model))

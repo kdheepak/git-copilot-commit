@@ -151,6 +151,21 @@ def commit_with_retry_no_verify(
         raise typer.Exit(1)
 
 
+@app.command("authenticate")
+@app.command("login", hidden=True)
+def authenticate(
+    force: bool = typer.Option(
+        False, "--force", help="Replace cached GitHub Copilot credentials"
+    ),
+):
+    """Authenticate with GitHub Copilot and cache credentials locally."""
+    try:
+        github_copilot.login(force=force)
+    except github_copilot.CopilotError as exc:
+        console.print(f"[red]Authentication failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+
 @app.command()
 def commit(
     all_files: bool = typer.Option(
@@ -180,11 +195,15 @@ def commit(
 
     try:
         existing_credentials = github_copilot.load_credentials()
-    except Exception as _:
+    except github_copilot.CopilotError:
         existing_credentials = None
 
     if existing_credentials is None:
-        github_copilot.login()
+        try:
+            github_copilot.login(force=True)
+        except github_copilot.CopilotError as exc:
+            console.print(f"[red]Authentication failed: {exc}[/red]")
+            raise typer.Exit(1)
 
     # Load settings and use default model if none provided
     settings = Settings()
@@ -228,11 +247,17 @@ def commit(
             Panel(context.strip(), title="User Context", border_style="magenta")
         )
 
-    # Generate or use provided commit message
-    with console.status(
-        "[yellow]Generating commit message based on [bold]`git diff --staged`[/] ...[/yellow]"
-    ):
-        commit_message = generate_commit_message(repo, model, context=context)
+    try:
+        github_copilot.ensure_auth_ready(model=model)
+
+        # Generate or use provided commit message
+        with console.status(
+            "[yellow]Generating commit message based on [bold]`git diff --staged`[/] ...[/yellow]"
+        ):
+            commit_message = generate_commit_message(repo, model, context=context)
+    except github_copilot.CopilotError as exc:
+        console.print(f"[red]Could not generate a commit message: {exc}[/red]")
+        raise typer.Exit(1)
 
     console.print("[yellow]Generated commit message.[/yellow]")
 
