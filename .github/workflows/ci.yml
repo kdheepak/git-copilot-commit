@@ -29,8 +29,12 @@ jobs:
       - name: Run type checking
         run: uvx ty check
 
+      - name: Run tests
+        run: uv run pytest
+
   publish:
     if: github.event_name == 'release' && github.event.action == 'published'
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
