@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import httpx
-from rich.console import Console
+from rich.columns import Columns
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .settings import Settings
 
@@ -60,6 +62,36 @@ class CopilotHttpError(CopilotError):
         self.detail = detail
         suffix = f": {detail}" if detail else ""
         super().__init__(f"{status_code} {reason_phrase}{suffix}")
+
+
+class ModelSelectionError(CopilotError):
+    def __init__(
+        self,
+        *,
+        models: list["CopilotModel"],
+        requested_model: str | None = None,
+        configured_default_model: str | None = None,
+        configured_default_model_path: Path | None = None,
+    ) -> None:
+        self.models = models
+        self.requested_model = requested_model
+        self.configured_default_model = configured_default_model
+        self.configured_default_model_path = configured_default_model_path
+
+        if requested_model is not None:
+            message = f"Model `{requested_model}` was not returned by Copilot."
+        else:
+            location = (
+                f" from {configured_default_model_path}"
+                if configured_default_model_path is not None
+                else ""
+            )
+            message = (
+                f"Configured default model `{configured_default_model}`{location} "
+                "was not returned by Copilot."
+            )
+
+        super().__init__(message)
 
 
 @dataclass(slots=True)
@@ -760,16 +792,19 @@ def pick_model(
     by_id = {model.id: model for model in models}
     if requested_model is not None:
         if requested_model not in by_id:
-            raise CopilotError(
-                f"Model `{requested_model}` was not returned by Copilot. Available models: {', '.join(model.id for model in models)}"
+            raise ModelSelectionError(
+                models=models,
+                requested_model=requested_model,
             )
         return by_id[requested_model]
 
     configured_default_model = load_config().default_model
     if configured_default_model is not None:
         if configured_default_model not in by_id:
-            raise CopilotError(
-                f"Configured default model `{configured_default_model}` from {config_path()} was not returned by Copilot. Available models: {', '.join(model.id for model in models)}"
+            raise ModelSelectionError(
+                models=models,
+                configured_default_model=configured_default_model,
+                configured_default_model_path=config_path(),
             )
         return by_id[configured_default_model]
 
@@ -1135,6 +1170,41 @@ def print_model_table(models: list[CopilotModel]) -> None:
     console.print(table)
 
 
+def render_model_selection_error(error: ModelSelectionError):
+    summary = Table.grid(padding=(0, 1))
+    summary.add_column(style="red", no_wrap=True)
+    summary.add_column()
+
+    if error.requested_model is not None:
+        summary.add_row("Invalid model", error.requested_model)
+    elif error.configured_default_model is not None:
+        summary.add_row("Config model", error.configured_default_model)
+        if error.configured_default_model_path is not None:
+            summary.add_row("Config file", str(error.configured_default_model_path))
+
+    summary.add_row("Reason", "Copilot did not return that model id.")
+    summary.add_row("Available", str(len(error.models)))
+    summary.add_row("Tip", "Run `git-copilot-commit models` for the full model table.")
+
+    model_labels = [
+        Text(model.id, style="green")
+        for model in sorted(error.models, key=lambda model: model.id.lower())
+    ]
+
+    return Group(
+        Panel.fit(summary, title="Model Selection Error", border_style="red"),
+        Panel(
+            Columns(model_labels, equal=False, expand=True),
+            title="Available Model IDs",
+            border_style="cyan",
+        ),
+    )
+
+
+def print_model_selection_error(error: ModelSelectionError) -> None:
+    console.print(render_model_selection_error(error))
+
+
 def format_relative_duration(delta_seconds: int) -> str:
     remaining = abs(delta_seconds)
     units = (
@@ -1386,13 +1456,13 @@ def ensure_auth_ready(
     model: str | None = None,
     *,
     http_client_config: HttpClientConfig | None = None,
-) -> None:
-    def validate(client: httpx.Client) -> None:
+) -> CopilotModel:
+    def validate(client: httpx.Client) -> CopilotModel:
         credentials = ensure_fresh_credentials(client)
         all_models = list_models(client, credentials)
-        pick_model(all_models, model)
+        return pick_model(all_models, model)
 
-    _with_reauthentication(validate, http_client_config=http_client_config)
+    return _with_reauthentication(validate, http_client_config=http_client_config)
 
 
 def get_available_models(
