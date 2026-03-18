@@ -6,7 +6,9 @@ Your task is to generate a commit message in the [Conventional Commits](https://
 
 ## Output Format
 
+```
 <type>(<optional scope>): <description>
+```
 
 - Do not include a body or footer.
 - Do not wrap the message in backticks or code blocks.
