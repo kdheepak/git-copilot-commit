@@ -23,6 +23,7 @@ from .split_commits import (
     SplitPlanningError,
     build_split_plan_prompt,
     build_status_for_patch_units,
+    evaluate_auto_split,
     extract_patch_units,
     group_patch_units,
     parse_split_plan_response,
@@ -36,6 +37,7 @@ app = typer.Typer(help=__doc__, add_completion=False)
 
 COMMIT_MESSAGE_PROMPT_FILENAME = "commit-message-generator-prompt.md"
 SPLIT_COMMIT_PLANNER_PROMPT_FILENAME = "split-commit-planner-prompt.md"
+DEFAULT_AUTO_MAX_COMMITS = 10
 SPLIT_DIFF_ARGS = [
     "--binary",
     "--full-index",
@@ -470,6 +472,7 @@ def request_split_commit_plan(
     patch_units: tuple[PatchUnit, ...],
     *,
     max_commits: int,
+    preferred_commits: int | None = None,
     model: str | None = None,
     context: str = "",
     http_client_config: github_copilot.HttpClientConfig | None = None,
@@ -480,6 +483,7 @@ def request_split_commit_plan(
             status,
             patch_units,
             max_commits=max_commits,
+            preferred_commits=preferred_commits,
             context=context,
         )
 
@@ -542,7 +546,7 @@ def resolve_split_commit_limit(
 ) -> SplitCommitPlan:
     """Ask whether to proceed when the planner exceeds the configured limit."""
     console.print(
-        f"[yellow]Split planning produced {exc.actual_commits} commits, exceeding --max-commits={exc.max_commits}.[/yellow]"
+        f"[yellow]Split planning produced {exc.actual_commits} commits, exceeding the automatic review limit of {exc.max_commits}.[/yellow]"
     )
 
     if yes:
@@ -703,11 +707,10 @@ def handle_split_commit_flow(
     repo: GitRepository,
     status: GitStatus,
     *,
-    max_commits: int,
+    preferred_commits: int | None = None,
     model: str | None = None,
     yes: bool = False,
     context: str = "",
-    prompt_file: Path | None = None,
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> None:
     """Generate, display, and execute the split-commit flow."""
@@ -725,7 +728,6 @@ def handle_split_commit_flow(
             model=model,
             yes=yes,
             context=context,
-            prompt_file=prompt_file,
             http_client_config=http_client_config,
         )
         return
@@ -740,16 +742,43 @@ def handle_split_commit_flow(
             model=model,
             yes=yes,
             context=context,
-            prompt_file=prompt_file,
             http_client_config=http_client_config,
         )
         return
+
+    if preferred_commits is None:
+        should_split, reason = evaluate_auto_split(patch_units)
+        if not should_split:
+            console.print(
+                "[yellow]Auto split not triggered: "
+                f"{reason}. Creating a single commit. Use [bold]--split N[/] to suggest an upper bound.[/yellow]"
+            )
+            handle_single_commit_flow(
+                repo,
+                status,
+                model=model,
+                yes=yes,
+                context=context,
+                http_client_config=http_client_config,
+            )
+            return
+
+        console.print(f"[yellow]Auto split triggered: {reason}.[/yellow]")
+    else:
+        console.print(
+            f"[yellow]Planning up to {preferred_commits} commits from the staged patch units.[/yellow]"
+        )
 
     try:
         split_plan = request_split_commit_plan(
             status,
             patch_units,
-            max_commits=max_commits,
+            max_commits=(
+                DEFAULT_AUTO_MAX_COMMITS
+                if preferred_commits is None
+                else preferred_commits
+            ),
+            preferred_commits=preferred_commits,
             model=model,
             context=context,
             http_client_config=http_client_config,
@@ -885,7 +914,7 @@ def commit(
         False, "--all", "-a", help="Stage all files before committing"
     ),
     split: SplitOption = False,
-    max_commits: MaxCommitsOption = 10,
+    split_count: SplitCountOption = None,
     model: str | None = typer.Option(
         None,
         "--model",
@@ -949,11 +978,11 @@ def commit(
     display_selected_model(selected_model)
     model = selected_model.id
 
-    if split:
+    if split or split_count is not None:
         handle_split_commit_flow(
             repo,
             status,
-            max_commits=max_commits,
+            preferred_commits=split_count,
             model=model,
             yes=yes,
             context=context,

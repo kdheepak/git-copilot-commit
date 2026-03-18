@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 import git_copilot_commit.cli as cli
 from git_copilot_commit import github_copilot
 from git_copilot_commit.cli import (
+    DEFAULT_AUTO_MAX_COMMITS,
     PreparedSplitCommit,
     build_http_client_config,
     build_commit_message_prompt,
@@ -21,8 +22,10 @@ from git_copilot_commit.cli import (
     load_system_prompt,
     normalize_model_name,
     print_copilot_error,
+    preprocess_cli_args,
     resolve_prompt_file,
     resolve_split_commit_limit,
+    run,
     SPLIT_DIFF_ARGS,
     stage_changes_for_commit,
 )
@@ -240,6 +243,49 @@ def test_build_http_client_config_and_normalize_model_name(
     assert normalize_model_name(None) is None
 
 
+def test_preprocess_cli_args_rewrites_split_syntax() -> None:
+    assert preprocess_cli_args(["commit", "--split=auto", "--yes"]) == [
+        "commit",
+        "--split",
+        "--yes",
+    ]
+    assert preprocess_cli_args(["commit", "--split", "auto", "--yes"]) == [
+        "commit",
+        "--split",
+        "--yes",
+    ]
+    assert preprocess_cli_args(["commit", "--split=3", "--yes"]) == [
+        "commit",
+        "--split-count",
+        "3",
+        "--yes",
+    ]
+    assert preprocess_cli_args(["commit", "--split", "3", "--yes"]) == [
+        "commit",
+        "--split-count",
+        "3",
+        "--yes",
+    ]
+    assert preprocess_cli_args(["summary", "--split=auto"]) == [
+        "summary",
+        "--split=auto",
+    ]
+
+
+def test_run_uses_preprocessed_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    command = Mock()
+    monkeypatch.setattr(cli, "get_command", Mock(return_value=command))
+
+    run(["commit", "--split=auto", "--yes"])
+
+    command.main.assert_called_once()
+    assert command.main.call_args.kwargs["args"] == [
+        "commit",
+        "--split",
+        "--yes",
+    ]
+
+
 def test_load_named_prompt_prefers_first_existing_location(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -432,9 +478,53 @@ def test_handle_split_commit_flow_falls_back_to_single_commit(
     monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
     monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: [])
 
-    handle_split_commit_flow(repo, status, max_commits=3, model="gpt-5.4")
+    handle_split_commit_flow(repo, status, model="gpt-5.4")
 
     fallback.assert_called_once()
+
+
+def test_handle_split_commit_flow_auto_mode_can_skip_split_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = Mock()
+    repo.get_staged_diff.return_value = "diff"
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    patch_units = (
+        PatchUnit(
+            id="u1",
+            order=0,
+            path="src/example.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 1",
+            summary="summary 1",
+        ),
+        PatchUnit(
+            id="u2",
+            order=1,
+            path="src/example.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 2",
+            summary="summary 2",
+        ),
+    )
+    fallback = Mock()
+    planner = Mock()
+    monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
+    monkeypatch.setattr(cli, "request_split_commit_plan", planner)
+    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+
+    handle_split_commit_flow(
+        repo,
+        status,
+        model="gpt-5.4",
+    )
+
+    fallback.assert_called_once()
+    planner.assert_not_called()
 
 
 def test_handle_split_commit_flow_handles_invalid_plan_and_single_commit_result(
@@ -475,7 +565,7 @@ def test_handle_split_commit_flow_handles_invalid_plan_and_single_commit_result(
         Mock(side_effect=cli.SplitPlanningError("bad plan")),
     )
 
-    handle_split_commit_flow(repo, status, max_commits=3, model="gpt-5.4")
+    handle_split_commit_flow(repo, status, model="gpt-5.4")
 
     fallback.assert_called_once()
 
@@ -498,8 +588,203 @@ def test_handle_split_commit_flow_handles_invalid_plan_and_single_commit_result(
     monkeypatch.setattr(cli, "execute_commit_action", execute_action)
     fallback.reset_mock()
 
-    handle_split_commit_flow(repo, status, max_commits=3, model="gpt-5.4")
+    handle_split_commit_flow(repo, status, model="gpt-5.4")
 
     fallback.assert_not_called()
     display_message.assert_called_once_with("feat: one commit after planning")
     execute_action.assert_called_once()
+
+
+def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    repo = Mock()
+    repo.get_staged_diff.return_value = "diff"
+    patch_units = (
+        PatchUnit(
+            id="u1",
+            order=0,
+            path="src/app.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 1",
+            summary="summary 1",
+        ),
+        PatchUnit(
+            id="u2",
+            order=1,
+            path="README.md",
+            staged_status="A",
+            kind="new_file",
+            patch="patch 2",
+            summary="summary 2",
+        ),
+    )
+    split_plan = Mock()
+    prepared_commits = [
+        PreparedSplitCommit(message="feat: code", patch_units=(patch_units[0],)),
+        PreparedSplitCommit(message="docs: readme", patch_units=(patch_units[1],)),
+    ]
+    request_plan = Mock(return_value=split_plan)
+    request_messages = Mock(return_value=prepared_commits)
+    execute_plan = Mock(return_value=["aaaabbbb", "ccccdddd"])
+    display_plan = Mock()
+    fallback = Mock()
+    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "request_split_commit_plan", request_plan)
+    monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
+    monkeypatch.setattr(cli, "execute_split_commit_plan", execute_plan)
+    monkeypatch.setattr(cli, "display_split_commit_plan", display_plan)
+    monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
+
+    handle_split_commit_flow(
+        repo,
+        status,
+        model="gpt-5.4",
+    )
+
+    fallback.assert_not_called()
+    request_plan.assert_called_once_with(
+        status,
+        patch_units,
+        max_commits=DEFAULT_AUTO_MAX_COMMITS,
+        preferred_commits=None,
+        model="gpt-5.4",
+        context="",
+        http_client_config=None,
+    )
+    request_messages.assert_called_once_with(
+        split_plan,
+        patch_units,
+        model="gpt-5.4",
+        context="",
+        http_client_config=None,
+    )
+    display_plan.assert_called_once_with(prepared_commits)
+    execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
+
+
+def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    repo = Mock()
+    repo.get_staged_diff.return_value = "diff"
+    patch_units = (
+        PatchUnit(
+            id="u1",
+            order=0,
+            path="src/app.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 1",
+            summary="summary 1",
+        ),
+        PatchUnit(
+            id="u2",
+            order=1,
+            path="README.md",
+            staged_status="A",
+            kind="new_file",
+            patch="patch 2",
+            summary="summary 2",
+        ),
+    )
+    split_plan = Mock()
+    prepared_commits = [
+        PreparedSplitCommit(message="feat: code", patch_units=(patch_units[0],)),
+        PreparedSplitCommit(message="docs: readme", patch_units=(patch_units[1],)),
+    ]
+    request_plan = Mock(return_value=split_plan)
+    request_messages = Mock(return_value=prepared_commits)
+    execute_plan = Mock(return_value=["aaaabbbb", "ccccdddd"])
+    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "request_split_commit_plan", request_plan)
+    monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
+    monkeypatch.setattr(cli, "execute_split_commit_plan", execute_plan)
+    monkeypatch.setattr(cli, "display_split_commit_plan", Mock())
+    monkeypatch.setattr(cli, "handle_single_commit_flow", Mock())
+
+    handle_split_commit_flow(
+        repo,
+        status,
+        preferred_commits=2,
+        model="gpt-5.4",
+    )
+
+    request_plan.assert_called_once_with(
+        status,
+        patch_units,
+        max_commits=2,
+        preferred_commits=2,
+        model="gpt-5.4",
+        context="",
+        http_client_config=None,
+    )
+    execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
+
+
+def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = Mock()
+    repo.get_staged_diff.return_value = "diff"
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    patch_units = (
+        PatchUnit(
+            id="u1",
+            order=0,
+            path="src/example.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 1",
+            summary="summary 1",
+        ),
+        PatchUnit(
+            id="u2",
+            order=1,
+            path="src/example.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 2",
+            summary="summary 2",
+        ),
+    )
+    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    request_plan = Mock(return_value=Mock())
+    request_messages = Mock(
+        return_value=[
+            PreparedSplitCommit(
+                message="feat: combine both changes",
+                patch_units=patch_units,
+            )
+        ]
+    )
+    monkeypatch.setattr(cli, "request_split_commit_plan", request_plan)
+    monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
+    monkeypatch.setattr(cli, "display_commit_message", Mock())
+    monkeypatch.setattr(cli, "execute_commit_action", Mock(return_value="deadbeef"))
+
+    handle_split_commit_flow(
+        repo,
+        status,
+        preferred_commits=3,
+        model="gpt-5.4",
+    )
+
+    request_plan.assert_called_once_with(
+        status,
+        patch_units,
+        max_commits=3,
+        preferred_commits=3,
+        model="gpt-5.4",
+        context="",
+        http_client_config=None,
+    )
