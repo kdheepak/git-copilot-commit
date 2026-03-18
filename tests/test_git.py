@@ -1,9 +1,4 @@
-import subprocess
-import tempfile
-import unittest
-from pathlib import Path
-
-from git_copilot_commit.git import GitRepository
+import re
 
 FIRST_PATCH = """\
 diff --git a/file.txt b/file.txt
@@ -32,95 +27,69 @@ index 4f11a6d..41a082c 100644
 """
 
 
-class GitRepositoryAlternateIndexTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.repo_path = Path(self.tempdir.name)
-        self.run_git("init", "-q")
-        self.run_git("config", "user.name", "Test User")
-        self.run_git("config", "user.email", "test@example.com")
+def test_get_staged_diff_supports_extra_flags(git_repo, git_repo_path) -> None:
+    file_path = git_repo_path / "file.txt"
+    file_path.write_text("before\n", encoding="utf-8")
+    git_repo.stage_files(["file.txt"])
+    git_repo.commit("init", no_verify=True)
 
-    def tearDown(self) -> None:
-        self.tempdir.cleanup()
+    file_path.write_text("after\n", encoding="utf-8")
+    git_repo.stage_files(["file.txt"])
 
-    def run_git(self, *args: str) -> str:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=self.repo_path,
-            capture_output=True,
-            text=True,
-            check=True,
+    diff = git_repo.get_staged_diff(extra_args=["--full-index"])
+
+    assert "diff --git" in diff
+    assert re.search(r"index [0-9a-f]{40}\.\.[0-9a-f]{40}", diff)
+
+
+def test_alternate_index_commit_preserves_real_index_and_unstaged_changes(
+    git_repo, git_repo_path
+) -> None:
+    file_path = git_repo_path / "file.txt"
+    file_path.write_text("a\nb\nc\nd\n", encoding="utf-8")
+    git_repo.stage_files(["file.txt"])
+    git_repo.commit("init", no_verify=True)
+
+    file_path.write_text("A\nb\nc\nD\n", encoding="utf-8")
+    git_repo.stage_files(["file.txt"])
+    file_path.write_text("A\nbb\nc\nD\nextra\n", encoding="utf-8")
+
+    initial_status = git_repo.get_status()
+    assert initial_status.has_staged_changes
+    assert initial_status.has_unstaged_changes
+    original_unstaged_diff = initial_status.unstaged_diff
+
+    with git_repo.temporary_alternate_index() as alternate_index:
+        assert alternate_index.path.exists()
+
+        git_repo.check_patch_for_alternate_index(FIRST_PATCH, index=alternate_index)
+        git_repo.apply_patch_to_alternate_index(FIRST_PATCH, index=alternate_index)
+        first_commit = git_repo.commit(
+            "part 1",
+            env=alternate_index.env,
+            no_verify=True,
         )
-        return result.stdout
+        assert len(first_commit) == 40
 
-    def test_get_staged_diff_supports_extra_flags(self) -> None:
-        repo = GitRepository(self.repo_path)
-        file_path = self.repo_path / "file.txt"
-        file_path.write_text("before\n", encoding="utf-8")
-        repo.stage_files(["file.txt"])
-        repo.commit("init", no_verify=True)
+        after_first_commit = git_repo.get_status()
+        assert after_first_commit.has_staged_changes
+        assert after_first_commit.unstaged_diff == original_unstaged_diff
 
-        file_path.write_text("after\n", encoding="utf-8")
-        repo.stage_files(["file.txt"])
+        git_repo.check_patch_for_alternate_index(SECOND_PATCH, index=alternate_index)
+        git_repo.apply_patch_to_alternate_index(SECOND_PATCH, index=alternate_index)
+        second_commit = git_repo.commit(
+            "part 2",
+            env=alternate_index.env,
+            no_verify=True,
+        )
+        assert len(second_commit) == 40
 
-        diff = repo.get_staged_diff(extra_args=["--full-index"])
+    assert not alternate_index.path.exists()
 
-        self.assertIn("diff --git", diff)
-        self.assertRegex(diff, r"index [0-9a-f]{40}\.\.[0-9a-f]{40}")
+    final_status = git_repo.get_status()
+    assert not final_status.has_staged_changes
+    assert final_status.has_unstaged_changes
+    assert final_status.unstaged_diff == original_unstaged_diff
 
-    def test_alternate_index_commit_preserves_real_index_and_unstaged_changes(
-        self,
-    ) -> None:
-        repo = GitRepository(self.repo_path)
-        file_path = self.repo_path / "file.txt"
-        file_path.write_text("a\nb\nc\nd\n", encoding="utf-8")
-        repo.stage_files(["file.txt"])
-        repo.commit("init", no_verify=True)
-
-        file_path.write_text("A\nb\nc\nD\n", encoding="utf-8")
-        repo.stage_files(["file.txt"])
-        file_path.write_text("A\nbb\nc\nD\nextra\n", encoding="utf-8")
-
-        initial_status = repo.get_status()
-        self.assertTrue(initial_status.has_staged_changes)
-        self.assertTrue(initial_status.has_unstaged_changes)
-        original_unstaged_diff = initial_status.unstaged_diff
-
-        with repo.temporary_alternate_index() as alternate_index:
-            self.assertTrue(alternate_index.path.exists())
-
-            repo.check_patch_for_alternate_index(FIRST_PATCH, index=alternate_index)
-            repo.apply_patch_to_alternate_index(FIRST_PATCH, index=alternate_index)
-            first_commit = repo.commit(
-                "part 1",
-                env=alternate_index.env,
-                no_verify=True,
-            )
-            self.assertEqual(len(first_commit), 40)
-
-            after_first_commit = repo.get_status()
-            self.assertTrue(after_first_commit.has_staged_changes)
-            self.assertEqual(after_first_commit.unstaged_diff, original_unstaged_diff)
-
-            repo.check_patch_for_alternate_index(SECOND_PATCH, index=alternate_index)
-            repo.apply_patch_to_alternate_index(SECOND_PATCH, index=alternate_index)
-            second_commit = repo.commit(
-                "part 2",
-                env=alternate_index.env,
-                no_verify=True,
-            )
-            self.assertEqual(len(second_commit), 40)
-
-        self.assertFalse(alternate_index.path.exists())
-
-        final_status = repo.get_status()
-        self.assertFalse(final_status.has_staged_changes)
-        self.assertTrue(final_status.has_unstaged_changes)
-        self.assertEqual(final_status.unstaged_diff, original_unstaged_diff)
-
-        recent_messages = [message for _, message in repo.get_recent_commits(limit=2)]
-        self.assertEqual(recent_messages, ["part 2", "part 1"])
-
-
-if __name__ == "__main__":
-    unittest.main()
+    recent_messages = [message for _, message in git_repo.get_recent_commits(limit=2)]
+    assert recent_messages == ["part 2", "part 1"]
