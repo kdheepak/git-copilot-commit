@@ -42,7 +42,6 @@ DEFAULT_MODEL_PREFERENCES = (
 )
 
 console = Console()
-console_err = Console(stderr=True)
 T = TypeVar("T")
 
 
