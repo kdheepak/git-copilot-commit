@@ -19,7 +19,6 @@ small number of coherent commits.
 - If multiple units belong to the same logical change, keep them together.
 - If the staged changes are best represented as a single coherent commit, return
   one commit.
-- Never exceed the maximum commit count provided by the user prompt.
 
 ## Output
 

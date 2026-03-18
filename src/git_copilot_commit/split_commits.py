@@ -8,6 +8,8 @@ from typing import Any, Iterable, Sequence
 from .git import GitFile, GitStatus
 
 DIFF_HEADER_PREFIX = "diff --git "
+AUTO_SPLIT_UNIT_THRESHOLD = 3
+AUTO_SPLIT_PATH_THRESHOLD = 4
 
 
 class SplitPlanningError(ValueError):
@@ -65,6 +67,33 @@ class SplitCommitPlan:
     """A validated split-commit plan."""
 
     commits: tuple[SplitPlanCommit, ...]
+
+
+def evaluate_auto_split(patch_units: Sequence[PatchUnit]) -> tuple[bool, str]:
+    """Return whether automatic split planning should run for the patch set."""
+    if len(patch_units) < 2:
+        return False, "fewer than two independent patch units were found"
+
+    kinds = {unit.kind for unit in patch_units}
+    staged_statuses = {unit.staged_status for unit in patch_units}
+    paths = {unit.path for unit in patch_units}
+
+    if len(patch_units) >= AUTO_SPLIT_UNIT_THRESHOLD:
+        return True, f"found {len(patch_units)} independent patch units"
+
+    if len(kinds) >= 2:
+        return True, f"found mixed change kinds ({', '.join(sorted(kinds))})"
+
+    if len(staged_statuses) >= 2:
+        return True, (
+            "found mixed staged change types "
+            f"({', '.join(sorted(staged_statuses))})"
+        )
+
+    if len(paths) >= AUTO_SPLIT_PATH_THRESHOLD:
+        return True, f"found changes across {len(paths)} files"
+
+    return False, f"found only {len(patch_units)} similar patch units"
 
 
 def extract_patch_units(diff_text: str) -> list[PatchUnit]:
@@ -184,6 +213,7 @@ def build_split_plan_prompt(
     patch_units: Sequence[PatchUnit],
     *,
     max_commits: int,
+    preferred_commits: int | None = None,
     context: str = "",
 ) -> str:
     """Build the user prompt used to request a split-commit plan."""
@@ -194,9 +224,12 @@ def build_split_plan_prompt(
     if context.strip():
         prompt_parts.append(f"User-provided context:\n\n{context.strip()}\n")
 
+    if preferred_commits is not None:
+        prompt_parts.append(f"Preferred commits: {preferred_commits}")
+    prompt_parts.append(f"Maximum commits: {max_commits}")
+
     prompt_parts.extend(
         [
-            f"Maximum commits: {max_commits}",
             "",
             "`git status`:",
             f"```\n{status.get_porcelain_output()}\n```",
