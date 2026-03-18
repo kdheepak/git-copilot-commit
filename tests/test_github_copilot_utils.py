@@ -47,16 +47,20 @@ def test_normalize_domain_and_url_helpers() -> None:
     assert github_copilot.get_github_api_base_url("github.example.com") == (
         "https://api.github.example.com"
     )
-    assert github_copilot.get_base_url_from_token("token;proxy-ep=proxy.example.com") == (
-        "https://api.example.com"
-    )
+    assert github_copilot.get_base_url_from_token(
+        "token;proxy-ep=proxy.example.com"
+    ) == ("https://api.example.com")
     assert github_copilot.get_base_url_from_token("token-without-proxy-host") is None
-    assert github_copilot.get_github_copilot_base_url(
-        "token;proxy-ep=proxy.enterprise.example.com"
-    ) == "https://api.enterprise.example.com"
-    assert github_copilot.get_github_copilot_base_url(
-        None, "github.example.com"
-    ) == "https://copilot-api.github.example.com"
+    assert (
+        github_copilot.get_github_copilot_base_url(
+            "token;proxy-ep=proxy.enterprise.example.com"
+        )
+        == "https://api.enterprise.example.com"
+    )
+    assert (
+        github_copilot.get_github_copilot_base_url(None, "github.example.com")
+        == "https://copilot-api.github.example.com"
+    )
     assert github_copilot.get_github_copilot_base_url() == (
         "https://api.individual.githubcopilot.com"
     )
@@ -169,9 +173,7 @@ def test_pick_model_covers_requested_defaults_and_fallbacks(
         "load_config",
         lambda: github_copilot.CopilotConfig(default_model="missing-config-model"),
     )
-    monkeypatch.setattr(
-        github_copilot, "config_path", lambda: Path("/tmp/config.json")
-    )
+    monkeypatch.setattr(github_copilot, "config_path", lambda: Path("/tmp/config.json"))
     with pytest.raises(github_copilot.ModelSelectionError) as config_error:
         github_copilot.pick_model(models)
     assert config_error.value.configured_default_model == "missing-config-model"
@@ -183,9 +185,9 @@ def test_pick_model_covers_requested_defaults_and_fallbacks(
         lambda: github_copilot.CopilotConfig(default_model=None),
     )
     assert github_copilot.pick_model(models).id == "claude-sonnet-4.6"
-    assert github_copilot.pick_model([make_model("z-model"), make_model("a-model")]).id == (
-        "z-model"
-    )
+    assert github_copilot.pick_model(
+        [make_model("z-model"), make_model("a-model")]
+    ).id == ("z-model")
 
 
 def test_infer_api_surface_and_vendor_filtering() -> None:
@@ -252,49 +254,63 @@ def test_reauthentication_and_json_cache_helpers(tmp_path) -> None:
 
 
 def test_extract_completion_text_handles_supported_shapes() -> None:
-    assert github_copilot.extract_completion_text(
-        {"choices": [{"message": {"content": "  feat: add support  "}}]}
-    ) == "feat: add support"
+    assert (
+        github_copilot.extract_completion_text(
+            {"choices": [{"message": {"content": "  feat: add support  "}}]}
+        )
+        == "feat: add support"
+    )
 
-    assert github_copilot.extract_completion_text(
-        {
-            "choices": [
-                {
-                    "message": {
-                        "content": [
-                            {"text": "feat: first line"},
-                            {"content": "second line"},
-                            {"ignored": True},
-                        ]
+    assert (
+        github_copilot.extract_completion_text(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"text": "feat: first line"},
+                                {"content": "second line"},
+                                {"ignored": True},
+                            ]
+                        }
                     }
-                }
-            ]
-        }
-    ) == "feat: first line\nsecond line"
+                ]
+            }
+        )
+        == "feat: first line\nsecond line"
+    )
 
     with pytest.raises(github_copilot.CopilotError):
-        github_copilot.extract_completion_text({"choices": [{"message": {"content": []}}]})
+        github_copilot.extract_completion_text(
+            {"choices": [{"message": {"content": []}}]}
+        )
 
 
 def test_extract_response_text_handles_text_refusals_and_errors() -> None:
-    assert github_copilot.extract_response_text({"output_text": "  feat: add support  "}) == (
-        "feat: add support"
+    assert github_copilot.extract_response_text(
+        {"output_text": "  feat: add support  "}
+    ) == ("feat: add support")
+    assert (
+        github_copilot.extract_response_text(
+            {
+                "output": [
+                    {
+                        "content": [
+                            {"text": "feat: first line"},
+                            {"text": "second line"},
+                        ]
+                    }
+                ]
+            }
+        )
+        == "feat: first line\nsecond line"
     )
-    assert github_copilot.extract_response_text(
-        {
-            "output": [
-                {
-                    "content": [
-                        {"text": "feat: first line"},
-                        {"text": "second line"},
-                    ]
-                }
-            ]
-        }
-    ) == "feat: first line\nsecond line"
-    assert github_copilot.extract_response_text(
-        {"output": [{"content": [{"refusal": "Refused for safety"}]}]}
-    ) == "Refused for safety"
+    assert (
+        github_copilot.extract_response_text(
+            {"output": [{"content": [{"refusal": "Refused for safety"}]}]}
+        )
+        == "Refused for safety"
+    )
 
     with pytest.raises(github_copilot.CopilotError):
         github_copilot.extract_response_text({"output": []})

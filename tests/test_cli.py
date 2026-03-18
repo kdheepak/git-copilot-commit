@@ -152,7 +152,11 @@ def test_resolve_split_commit_limit_can_proceed_with_larger_plan(
 ) -> None:
     monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
     plan = SplitCommitPlan(
-        commits=(SplitPlanCommit(("u1",)), SplitPlanCommit(("u2",)), SplitPlanCommit(("u3",)))
+        commits=(
+            SplitPlanCommit(("u1",)),
+            SplitPlanCommit(("u2",)),
+            SplitPlanCommit(("u3",)),
+        )
     )
     exc = SplitCommitLimitExceededError(plan, 2)
 
@@ -163,7 +167,11 @@ def test_resolve_split_commit_limit_can_proceed_with_larger_plan(
 
 def test_resolve_split_commit_limit_rejects_noninteractive_yes_mode() -> None:
     plan = SplitCommitPlan(
-        commits=(SplitPlanCommit(("u1",)), SplitPlanCommit(("u2",)), SplitPlanCommit(("u3",)))
+        commits=(
+            SplitPlanCommit(("u1",)),
+            SplitPlanCommit(("u2",)),
+            SplitPlanCommit(("u3",)),
+        )
     )
     exc = SplitCommitLimitExceededError(plan, 2)
 
@@ -313,7 +321,10 @@ def test_load_named_prompt_and_resolve_prompt_file_error_paths(
     monkeypatch.setattr(
         cli,
         "get_prompt_locations",
-        lambda _filename: [Path("/does/not/exist/one.md"), Path("/does/not/exist/two.md")],
+        lambda _filename: [
+            Path("/does/not/exist/one.md"),
+            Path("/does/not/exist/two.md"),
+        ],
     )
 
     with pytest.raises(typer.Exit):

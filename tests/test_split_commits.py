@@ -277,12 +277,15 @@ def test_classify_and_summarize_special_patch_kinds() -> None:
 
     assert summarize_file_patch(rename_patch) == "rename old.txt -> new.txt"
     assert summarize_file_patch(mode_patch) == "mode change script.sh"
-    assert summarize_hunk(
-        "src/app.py",
-        2,
-        3,
-        "@@ -1 +1 @@\n-old\n+new\n",
-    ) == "src/app.py hunk 2/3 @@ -1 +1 @@ (+1/-1)"
+    assert (
+        summarize_hunk(
+            "src/app.py",
+            2,
+            3,
+            "@@ -1 +1 @@\n-old\n+new\n",
+        )
+        == "src/app.py hunk 2/3 @@ -1 +1 @@ (+1/-1)"
+    )
 
 
 def test_count_patch_changes_find_duplicates_and_group_patch_units() -> None:
