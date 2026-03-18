@@ -1,7 +1,10 @@
+import os
 import subprocess
-from pathlib import Path
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Tuple
+from pathlib import Path
+from typing import Iterator, Mapping, Tuple
 
 
 class GitError(Exception):
@@ -20,6 +23,18 @@ class GitCommandError(GitError):
     """Raised when a git command fails."""
 
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class AlternateGitIndex:
+    """Represents a temporary git index file."""
+
+    path: Path
+
+    @property
+    def env(self) -> dict[str, str]:
+        """Environment variables needed to use this index."""
+        return {"GIT_INDEX_FILE": str(self.path)}
 
 
 @dataclass
@@ -118,7 +133,12 @@ class GitRepository:
             raise NotAGitRepositoryError(f"{self.repo_path} is not a git repository")
 
     def _run_git_command(
-        self, args: list[str], check: bool = True
+        self,
+        args: list[str],
+        check: bool = True,
+        env: Mapping[str, str] | None = None,
+        input_text: str | None = None,
+        capture_output: bool = True,
     ) -> subprocess.CompletedProcess:
         """
         Run a git command and return the result.
@@ -126,6 +146,9 @@ class GitRepository:
         Args:
             args: Git command arguments (without 'git' prefix).
             check: Whether to raise exception on non-zero exit code.
+            env: Environment variables to merge into the git process.
+            input_text: Optional text piped to stdin.
+            capture_output: Whether to capture stdout/stderr.
 
         Returns:
             CompletedProcess instance.
@@ -138,18 +161,34 @@ class GitRepository:
             result = subprocess.run(
                 cmd,
                 cwd=self.repo_path,
-                capture_output=True,
+                capture_output=capture_output,
                 text=True,
                 timeout=self.timeout,
                 check=check,
+                env=self._build_env(env),
+                input=input_text,
             )
             return result
         except subprocess.CalledProcessError as e:
-            raise GitCommandError(f"Git command failed: {' '.join(cmd)}\n{e.stderr}")
+            error_output = e.stderr or e.stdout or ""
+            if error_output:
+                raise GitCommandError(
+                    f"Git command failed: {' '.join(cmd)}\n{error_output}"
+                )
+            raise GitCommandError(f"Git command failed: {' '.join(cmd)}")
         except subprocess.TimeoutExpired:
             raise GitCommandError(f"Git command timed out: {' '.join(cmd)}")
 
-    def get_status(self) -> GitStatus:
+    def _build_env(self, env: Mapping[str, str] | None = None) -> dict[str, str] | None:
+        """Merge extra environment variables into the current process environment."""
+        if env is None:
+            return None
+
+        merged_env = os.environ.copy()
+        merged_env.update(env)
+        return merged_env
+
+    def get_status(self, env: Mapping[str, str] | None = None) -> GitStatus:
         """
         Get comprehensive git status information.
 
@@ -157,22 +196,43 @@ class GitRepository:
             GitStatus object with all status information.
         """
         # Get porcelain status
-        status_result = self._run_git_command(["status", "--porcelain"])
-
-        # Get staged diff
-        staged_diff_result = self._run_git_command(["diff", "--staged"])
-
-        # Get unstaged diff
-        unstaged_diff_result = self._run_git_command(["diff"])
+        status_result = self._run_git_command(["status", "--porcelain"], env=env)
 
         # Parse status output into GitFile objects
         files = self._parse_status_output(status_result.stdout)
 
         return GitStatus(
             files=files,
-            staged_diff=staged_diff_result.stdout,
-            unstaged_diff=unstaged_diff_result.stdout,
+            staged_diff=self.get_staged_diff(env=env),
+            unstaged_diff=self.get_unstaged_diff(env=env),
         )
+
+    def get_staged_diff(
+        self,
+        extra_args: list[str] | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> str:
+        """Get the staged diff, optionally with extra diff flags."""
+        args = ["diff", "--staged"]
+        if extra_args:
+            args.extend(extra_args)
+        return self._run_git_command(args, env=env).stdout
+
+    def get_unstaged_diff(
+        self,
+        extra_args: list[str] | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> str:
+        """Get the unstaged diff, optionally with extra diff flags."""
+        args = ["diff"]
+        if extra_args:
+            args.extend(extra_args)
+        return self._run_git_command(args, env=env).stdout
+
+    def get_head_sha(self, ref: str = "HEAD") -> str:
+        """Resolve a git ref to a commit SHA."""
+        result = self._run_git_command(["rev-parse", ref])
+        return result.stdout.strip()
 
     def _parse_status_output(self, status_output: str) -> list[GitFile]:
         """Parse git status --porcelain output into GitFile objects."""
@@ -226,11 +286,77 @@ class GitRepository:
         else:
             self._run_git_command(["reset", "HEAD"] + paths)
 
+    def create_alternate_index(self, from_ref: str = "HEAD") -> AlternateGitIndex:
+        """Create a temporary git index initialized from the provided ref."""
+        fd, index_path = tempfile.mkstemp(
+            prefix="git-copilot-commit-", suffix=".index"
+        )
+        os.close(fd)
+        alternate_index = AlternateGitIndex(Path(index_path))
+        self.read_tree(from_ref, index=alternate_index)
+        return alternate_index
+
+    @contextmanager
+    def temporary_alternate_index(
+        self, from_ref: str = "HEAD"
+    ) -> Iterator[AlternateGitIndex]:
+        """Yield a temporary alternate index and delete it afterwards."""
+        alternate_index = self.create_alternate_index(from_ref=from_ref)
+        try:
+            yield alternate_index
+        finally:
+            alternate_index.path.unlink(missing_ok=True)
+
+    def read_tree(self, ref: str, *, index: AlternateGitIndex) -> None:
+        """Populate an alternate index from the provided ref."""
+        self._run_git_command(["read-tree", ref], env=index.env)
+
+    def apply_patch(
+        self,
+        patch: str,
+        *,
+        cached: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        """Apply a patch, optionally to the index only."""
+        args = ["apply"]
+        if cached:
+            args.append("--cached")
+        args.append("-")
+        self._run_git_command(args, env=env, input_text=patch)
+
+    def check_patch(
+        self,
+        patch: str,
+        *,
+        cached: bool = False,
+        env: Mapping[str, str] | None = None,
+    ) -> None:
+        """Validate whether a patch can be applied."""
+        args = ["apply"]
+        if cached:
+            args.append("--cached")
+        args.extend(["--check", "-"])
+        self._run_git_command(args, env=env, input_text=patch)
+
+    def apply_patch_to_alternate_index(
+        self, patch: str, *, index: AlternateGitIndex
+    ) -> None:
+        """Apply a cached patch to an alternate index."""
+        self.apply_patch(patch, cached=True, env=index.env)
+
+    def check_patch_for_alternate_index(
+        self, patch: str, *, index: AlternateGitIndex
+    ) -> None:
+        """Validate whether a cached patch can be applied to an alternate index."""
+        self.check_patch(patch, cached=True, env=index.env)
+
     def commit(
         self,
         message: str | None = None,
         use_editor: bool = False,
         no_verify: bool = False,
+        env: Mapping[str, str] | None = None,
     ) -> str:
         """
         Create a commit with the given message or using git's editor.
@@ -247,9 +373,6 @@ class GitRepository:
             GitCommandError: If commit fails.
         """
         if use_editor:
-            import tempfile
-            import os
-
             # Create temp file with message as starting point
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".txt", delete=False
@@ -271,6 +394,7 @@ class GitRepository:
                     cwd=self.repo_path,
                     timeout=self.timeout,
                     check=True,
+                    env=self._build_env(env),
                 )
             except subprocess.CalledProcessError:
                 raise GitCommandError(f"Git commit failed: {' '.join(cmd)}")
@@ -287,11 +411,10 @@ class GitRepository:
                 args.append("-n")
             args.extend(["-m", message])
 
-            self._run_git_command(args)
+            self._run_git_command(args, env=env)
 
         # Extract commit SHA from output
-        sha_result = self._run_git_command(["rev-parse", "HEAD"])
-        return sha_result.stdout.strip()
+        return self.get_head_sha()
 
     def get_recent_commits(self, limit: int = 10) -> list[Tuple[str, str]]:
         """
