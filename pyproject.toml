@@ -1,7 +1,7 @@
 [project]
 name = "git-copilot-commit"
 dynamic = ["version"]
-description = "Automatically generate and commit changes using copilot"
+description = "Automatically generate and commit changes using GitHub Copilot"
 readme = "README.md"
 authors = [
   { name = "Dheepak Krishnamurthy", email = "1813121+kdheepak@users.noreply.github.com" },
