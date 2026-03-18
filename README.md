@@ -93,6 +93,8 @@ Usage: git-copilot-commit commit [OPTIONS]
 Options:
   -a, --all         Stage all files before committing
   -m, --model TEXT  Model to use for generating commit message
+  --prompt-file PATH
+                    Path to a Markdown file to use as the system prompt
   -y, --yes         Automatically accept the generated commit message
   --help            Show this message and exit.
 ```
@@ -115,6 +117,12 @@ Use a specific model:
 
 ```bash
 uvx git-copilot-commit commit --model claude-3.5-sonnet
+```
+
+Use a custom Markdown system prompt:
+
+```bash
+uvx git-copilot-commit commit --prompt-file /path/to/prompt.md
 ```
 
 ## Commit Message Format

@@ -25,6 +25,9 @@ NATIVE_TLS_HELP = (
     "Use the OS's native certificate store via 'truststore' for httpx instead of "
     "the Python bundle. Ignored if --ca-bundle or --insecure is used."
 )
+PROMPT_FILE_HELP = (
+    "Path to a Markdown file to use as the system prompt instead of the default prompt."
+)
 
 CaBundleOption = Annotated[
     str | None,
@@ -37,6 +40,16 @@ InsecureOption = Annotated[
 NativeTlsOption = Annotated[
     bool,
     typer.Option("--native-tls/--no-native-tls", help=NATIVE_TLS_HELP),
+]
+PromptFileOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--prompt-file",
+        metavar="PATH",
+        dir_okay=False,
+        resolve_path=True,
+        help=PROMPT_FILE_HELP,
+    ),
 ]
 
 
@@ -82,19 +95,37 @@ def get_prompt_locations():
     ]
 
 
-def get_active_prompt_path():
-    """Get the path of the prompt file that will be used."""
-    for path in get_prompt_locations():
-        try:
-            path.read_text(encoding="utf-8")
-            return str(path)
-        except (FileNotFoundError, AttributeError):
-            continue
-    return None
+def resolve_prompt_file(prompt_file: Path | None = None) -> Path | None:
+    if prompt_file is not None:
+        return prompt_file.expanduser()
+
+    settings = Settings()
+    try:
+        configured_prompt_file = settings.default_prompt_file
+    except ValueError:
+        console.print(
+            f"[red]Configured default prompt file in {settings.config_file} is invalid.[/red]"
+        )
+        raise typer.Exit(1)
+
+    if configured_prompt_file is None:
+        return None
+
+    return Path(configured_prompt_file).expanduser()
 
 
-def load_system_prompt() -> str:
+def load_system_prompt(prompt_file: Path | None = None) -> str:
     """Load the system prompt from the markdown file."""
+    resolved_prompt_file = resolve_prompt_file(prompt_file)
+    if resolved_prompt_file is not None:
+        try:
+            return resolved_prompt_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            console.print(
+                f"[red]Error reading prompt file {resolved_prompt_file}: {exc}[/red]"
+            )
+            raise typer.Exit(1)
+
     for path in get_prompt_locations():
         try:
             return path.read_text(encoding="utf-8")
@@ -124,6 +155,7 @@ def generate_commit_message(
     repo: GitRepository,
     model: str | None = None,
     context: str = "",
+    prompt_file: Path | None = None,
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> str:
     """Generate a conventional commit message using Copilot API."""
@@ -145,8 +177,6 @@ def generate_commit_message(
     if context.strip():
         prompt_parts.insert(0, f"User-provided context:\n\n{context.strip()}\n\n")
 
-    prompt_parts.append("\nGenerate a conventional commit message:")
-
     prompt = "\n".join(prompt_parts)
 
     if model is not None and model.startswith("github_copilot/"):
@@ -156,7 +186,7 @@ def generate_commit_message(
         f"""
 # System Prompt
 
-{load_system_prompt()}
+{load_system_prompt(prompt_file)}
 
 # Prompt
 
@@ -288,6 +318,7 @@ def commit(
         "-c",
         help="Optional user-provided context to guide commit message",
     ),
+    prompt_file: PromptFileOption = None,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
     native_tls: NativeTlsOption = False,
@@ -373,6 +404,7 @@ def commit(
                 repo,
                 model,
                 context=context,
+                prompt_file=prompt_file,
                 http_client_config=http_client_config,
             )
     except github_copilot.CopilotError as exc:

@@ -80,6 +80,27 @@ class Settings:
         """Set the default model."""
         self.set("default_model", model)
 
+    @property
+    def default_prompt_file(self) -> str | None:
+        """Get the configured default system prompt file."""
+        value = self.get("default_prompt_file")
+        defaults = self.get("defaults")
+
+        if isinstance(defaults, dict) and "prompt_file" in defaults:
+            value = defaults.get("prompt_file")
+
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("Configured default prompt file is invalid.")
+
+        return value.strip()
+
+    @default_prompt_file.setter
+    def default_prompt_file(self, prompt_file: str) -> None:
+        """Set the default system prompt file."""
+        self.set("default_prompt_file", prompt_file)
+
     def clear_cache(self) -> None:
         """Clear the cache directory."""
         for file in self.cache_dir.glob("*"):
