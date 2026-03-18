@@ -376,10 +376,9 @@ def iter_sse_events(response: httpx.Response, url: str):
             yield payload
 
 
-def load_credentials() -> CopilotCredentials | None:
-    path = credentials_path()
+def read_json_object(path: Path) -> dict[str, Any] | None:
     if not path.exists():
-        return
+        return None
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -391,11 +390,23 @@ def load_credentials() -> CopilotCredentials | None:
     if not isinstance(raw, dict):
         raise CopilotError(f"Cached credentials in {path} are not a JSON object.")
 
+    return raw
+
+
+def load_stored_credentials_from_path(path: Path) -> CopilotCredentials | None:
+    raw = read_json_object(path)
+    if raw is None:
+        return None
+
     return CopilotCredentials.from_dict(raw)
 
 
+def load_credentials() -> CopilotCredentials | None:
+    return load_stored_credentials_from_path(credentials_path())
+
+
 def save_credentials(credentials: CopilotCredentials) -> Path:
-    path = credentials_path()
+    path = credentials_path().expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(credentials.to_dict(), indent=2, sort_keys=True)
     path.write_text(f"{payload}\n", encoding="utf-8")
