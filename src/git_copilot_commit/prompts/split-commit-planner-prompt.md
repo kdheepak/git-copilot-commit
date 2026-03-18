@@ -24,12 +24,14 @@ small number of coherent commits.
 
 Return strict JSON only, with no code fences and no extra explanation:
 
+```json
 {
   "commits": [
     { "unit_ids": ["u1", "u2"] },
     { "unit_ids": ["u3"] }
   ]
 }
+```
 
 ## Do Not
 
