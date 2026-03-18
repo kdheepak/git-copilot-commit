@@ -149,10 +149,7 @@ def generate_commit_message(
 
     prompt = "\n".join(prompt_parts)
 
-    if model is None:
-        model = "gpt-5.1-codex"
-
-    if model.startswith("github_copilot/"):
+    if model is not None and model.startswith("github_copilot/"):
         model = model.replace("github_copilot/", "")
 
     return github_copilot.ask(
@@ -194,6 +191,11 @@ def commit_with_retry_no_verify(
 @app.command("authenticate")
 @app.command("login", hidden=True)
 def authenticate(
+    enterprise_domain: str | None = typer.Option(
+        None,
+        "--enterprise-domain",
+        help="GitHub Enterprise hostname. Omit for github.com.",
+    ),
     force: bool = typer.Option(
         False, "--force", help="Replace cached GitHub Copilot credentials"
     ),
@@ -209,11 +211,63 @@ def authenticate(
     )
     try:
         github_copilot.login(
+            enterprise_domain=enterprise_domain,
             force=force,
             http_client_config=http_client_config,
         )
     except github_copilot.CopilotError as exc:
         console.print(f"[red]Authentication failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command("summary")
+def summary(
+    ca_bundle: CaBundleOption = None,
+    insecure: InsecureOption = False,
+    native_tls: NativeTlsOption = False,
+):
+    """Show the current cached GitHub Copilot login summary."""
+    http_client_config = build_http_client_config(
+        ca_bundle=ca_bundle,
+        insecure=insecure,
+        native_tls=native_tls,
+    )
+    try:
+        github_copilot.show_login_summary(http_client_config=http_client_config)
+    except github_copilot.CopilotError as exc:
+        console.print(f"[red]Could not load login summary: {exc}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command("models")
+def models_command(
+    vendor: str | None = typer.Option(
+        None,
+        "--vendor",
+        help="Filter listed models by vendor: anthropic, gemini/google, or openai.",
+    ),
+    ca_bundle: CaBundleOption = None,
+    insecure: InsecureOption = False,
+    native_tls: NativeTlsOption = False,
+):
+    """List available Copilot models for the current account."""
+    http_client_config = build_http_client_config(
+        ca_bundle=ca_bundle,
+        insecure=insecure,
+        native_tls=native_tls,
+    )
+
+    try:
+        credentials, models = github_copilot.get_available_models(
+            vendor=vendor,
+            http_client_config=http_client_config,
+        )
+
+        console.print(f"[green]Copilot base URL:[/green] {credentials.base_url()}")
+        console.print(f"[green]Model count:[/green] {len(models)}")
+        github_copilot.print_model_table(models)
+    except github_copilot.CopilotError as exc:
+        console.print(f"[red]Could not load models: {exc}[/red]")
         raise typer.Exit(1)
 
 
@@ -267,11 +321,6 @@ def commit(
         except github_copilot.CopilotError as exc:
             console.print(f"[red]Authentication failed: {exc}[/red]")
             raise typer.Exit(1)
-
-    # Load settings and use default model if none provided
-    settings = Settings()
-    if model is None:
-        model = settings.default_model
 
     # Get initial status
     status = repo.get_status()

@@ -17,6 +17,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from .settings import Settings
+
 APP_NAME = "github-copilot-commit"
 CLI_AUTH_COMMAND = "git-copilot-commit authenticate"
 DEFAULT_GITHUB_DOMAIN = "github.com"
@@ -211,6 +213,28 @@ class GitHubViewer:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CopilotConfig:
+    default_model: str | None = None
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "CopilotConfig":
+        default_model = settings.get("default_model")
+        defaults = settings.get("defaults")
+
+        if isinstance(defaults, dict) and "model" in defaults:
+            default_model = defaults.get("model")
+
+        if default_model is not None:
+            if not isinstance(default_model, str) or not default_model.strip():
+                raise CopilotError(
+                    f"Configured default model in {config_path()} is invalid."
+                )
+            default_model = default_model.strip()
+
+        return cls(default_model=default_model)
+
+
 def xdg_data_home() -> Path:
     value = os.environ.get("XDG_DATA_HOME")
     if value:
@@ -220,6 +244,10 @@ def xdg_data_home() -> Path:
 
 def credentials_path() -> Path:
     return xdg_data_home() / APP_NAME / "copilot-auth.json"
+
+
+def config_path() -> Path:
+    return Settings().config_file
 
 
 def normalize_domain(input_value: str | None) -> str | None:
@@ -440,6 +468,10 @@ def load_stored_credentials_from_path(path: Path) -> CopilotCredentials | None:
 
 def load_credentials() -> CopilotCredentials | None:
     return load_stored_credentials_from_path(credentials_path())
+
+
+def load_config() -> CopilotConfig:
+    return CopilotConfig.from_settings(Settings())
 
 
 def save_credentials(credentials: CopilotCredentials) -> Path:
@@ -732,6 +764,14 @@ def pick_model(
                 f"Model `{requested_model}` was not returned by Copilot. Available models: {', '.join(model.id for model in models)}"
             )
         return by_id[requested_model]
+
+    configured_default_model = load_config().default_model
+    if configured_default_model is not None:
+        if configured_default_model not in by_id:
+            raise CopilotError(
+                f"Configured default model `{configured_default_model}` from {config_path()} was not returned by Copilot. Available models: {', '.join(model.id for model in models)}"
+            )
+        return by_id[configured_default_model]
 
     for preferred_model in DEFAULT_MODEL_PREFERENCES:
         if preferred_model in by_id:
@@ -1147,6 +1187,7 @@ def print_login_summary(
     table.add_column(style="white")
 
     table.add_row("GitHub host", domain)
+    table.add_row("Config file", str(config_path()))
 
     if github_viewer is not None:
         identity = github_viewer.login
@@ -1167,14 +1208,81 @@ def print_login_summary(
     )
 
     if models is not None:
-        default_model = pick_model(models)
         table.add_row("Available models", str(len(models)))
-        table.add_row(
-            "Default model",
-            f"{default_model.id} ({infer_api_surface(default_model)})",
-        )
+        try:
+            default_model = pick_model(models)
+        except CopilotError as exc:
+            table.add_row("Default model", f"Unavailable ({exc})")
+        else:
+            table.add_row(
+                "Default model",
+                f"{default_model.id} ({infer_api_surface(default_model)})",
+            )
 
     console.print(Panel.fit(table, title="Login Summary"))
+
+
+def collect_login_summary(
+    client: httpx.Client,
+    credentials: CopilotCredentials,
+) -> tuple[str, GitHubViewer | None, list[CopilotModel] | None, list[str]]:
+    domain = credentials.enterprise_domain or DEFAULT_GITHUB_DOMAIN
+    github_viewer: GitHubViewer | None = None
+    available_models: list[CopilotModel] | None = None
+    warnings: list[str] = []
+
+    try:
+        github_viewer = fetch_github_viewer(
+            client,
+            credentials.github_access_token,
+            domain,
+        )
+    except CopilotError as exc:
+        warnings.append(f"Could not fetch GitHub account details: {exc}")
+
+    try:
+        available_models = list_models(client, credentials)
+    except CopilotError as exc:
+        warnings.append(f"Could not fetch Copilot model summary: {exc}")
+
+    return domain, github_viewer, available_models, warnings
+
+
+def show_login_summary(
+    *,
+    http_client_config: HttpClientConfig | None = None,
+) -> None:
+    def run(
+        client: httpx.Client,
+    ) -> tuple[
+        str,
+        CopilotCredentials,
+        GitHubViewer | None,
+        list[CopilotModel] | None,
+        list[str],
+    ]:
+        credentials = ensure_fresh_credentials(client)
+        domain, github_viewer, available_models, warnings = collect_login_summary(
+            client,
+            credentials,
+        )
+        return domain, credentials, github_viewer, available_models, warnings
+
+    domain, credentials, github_viewer, available_models, warnings = (
+        _with_reauthentication(
+            run,
+            http_client_config=http_client_config,
+        )
+    )
+
+    print_login_summary(
+        domain,
+        credentials,
+        github_viewer=github_viewer,
+        models=available_models,
+    )
+    for warning in warnings:
+        console.print(f"[yellow]Warning:[/yellow] {warning}")
 
 
 def login(
@@ -1224,19 +1332,10 @@ def login(
             client, github_access_token, normalized_domain
         )
         path = save_credentials(credentials)
-        github_viewer: GitHubViewer | None = None
-        available_models: list[CopilotModel] | None = None
-        warnings: list[str] = []
-
-        try:
-            github_viewer = fetch_github_viewer(client, github_access_token, domain)
-        except CopilotError as exc:
-            warnings.append(f"Could not fetch GitHub account details: {exc}")
-
-        try:
-            available_models = list_models(client, credentials)
-        except CopilotError as exc:
-            warnings.append(f"Could not fetch Copilot model summary: {exc}")
+        domain, github_viewer, available_models, warnings = collect_login_summary(
+            client,
+            credentials,
+        )
 
     console.print(f"[green]Saved Copilot credentials to[/green] {path}")
     print_login_summary(
@@ -1294,6 +1393,19 @@ def ensure_auth_ready(
         pick_model(all_models, model)
 
     _with_reauthentication(validate, http_client_config=http_client_config)
+
+
+def get_available_models(
+    vendor: str | None = None,
+    *,
+    http_client_config: HttpClientConfig | None = None,
+) -> tuple[CopilotCredentials, list[CopilotModel]]:
+    def load(client: httpx.Client) -> tuple[CopilotCredentials, list[CopilotModel]]:
+        credentials = ensure_fresh_credentials(client)
+        all_models = list_models(client, credentials)
+        return credentials, filter_models_by_vendor(all_models, vendor)
+
+    return _with_reauthentication(load, http_client_config=http_client_config)
 
 
 def ask(
