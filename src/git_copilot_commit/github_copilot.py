@@ -156,6 +156,25 @@ class CopilotModel:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class HttpClientConfig:
+    native_tls: bool = False
+    insecure: bool = False
+    ca_bundle: str | None = None
+
+    @property
+    def use_native_tls(self) -> bool:
+        return self.native_tls and not self.insecure and self.ca_bundle is None
+
+    @property
+    def verify(self) -> bool | str:
+        if self.insecure:
+            return False
+        if self.ca_bundle:
+            return self.ca_bundle
+        return True
+
+
 @dataclass(slots=True)
 class GitHubViewer:
     login: str
@@ -264,8 +283,34 @@ def get_github_copilot_base_url(
     return "https://api.individual.githubcopilot.com"
 
 
-def make_http_client() -> httpx.Client:
+_NATIVE_TLS_ENABLED = False
+
+
+def _maybe_enable_native_tls(native_tls: bool) -> None:
+    """
+    Globally switch httpx/requests to use the OS certificate store via truststore.
+    Safe to call multiple times; it no-ops after the first.
+    """
+    global _NATIVE_TLS_ENABLED
+    if not native_tls or _NATIVE_TLS_ENABLED:
+        return
+
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception as _:
+        return
+
+    _NATIVE_TLS_ENABLED = True
+
+
+def make_http_client(http_client_config: HttpClientConfig | None = None) -> httpx.Client:
+    config = http_client_config or HttpClientConfig()
+    _maybe_enable_native_tls(config.use_native_tls)
+
     return httpx.Client(
+        verify=config.verify,
         follow_redirects=True,
         timeout=httpx.Timeout(30.0, connect=10.0),
     )
@@ -1132,7 +1177,12 @@ def print_login_summary(
     console.print(Panel.fit(table, title="Login Summary"))
 
 
-def login(enterprise_domain: str | None = None, force: bool = False) -> None:
+def login(
+    enterprise_domain: str | None = None,
+    force: bool = False,
+    *,
+    http_client_config: HttpClientConfig | None = None,
+) -> None:
     """Authenticate with GitHub and cache Copilot credentials locally."""
     normalized_domain = normalize_domain(enterprise_domain)
     if enterprise_domain and not normalized_domain:
@@ -1151,7 +1201,7 @@ def login(enterprise_domain: str | None = None, force: bool = False) -> None:
         )
 
     domain = normalized_domain or DEFAULT_GITHUB_DOMAIN
-    with make_http_client() as client:
+    with make_http_client(http_client_config) as client:
         device = start_device_flow(client, domain)
 
         console.print(
@@ -1212,9 +1262,13 @@ def _ask_once(client: httpx.Client, prompt: str, model: str | None = None) -> st
     )
 
 
-def _with_reauthentication(action: Callable[[httpx.Client], T]) -> T:
+def _with_reauthentication(
+    action: Callable[[httpx.Client], T],
+    *,
+    http_client_config: HttpClientConfig | None = None,
+) -> T:
     try:
-        with make_http_client() as client:
+        with make_http_client(http_client_config) as client:
             return action(client)
     except CopilotError as exc:
         if not should_reauthenticate(exc):
@@ -1223,21 +1277,33 @@ def _with_reauthentication(action: Callable[[httpx.Client], T]) -> T:
     console.print(
         "[yellow]Cached GitHub Copilot credentials are missing or no longer valid. Starting authentication...[/yellow]"
     )
-    login(force=True)
+    login(force=True, http_client_config=http_client_config)
 
-    with make_http_client() as client:
+    with make_http_client(http_client_config) as client:
         return action(client)
 
 
-def ensure_auth_ready(model: str | None = None) -> None:
+def ensure_auth_ready(
+    model: str | None = None,
+    *,
+    http_client_config: HttpClientConfig | None = None,
+) -> None:
     def validate(client: httpx.Client) -> None:
         credentials = ensure_fresh_credentials(client)
         all_models = list_models(client, credentials)
         pick_model(all_models, model)
 
-    _with_reauthentication(validate)
+    _with_reauthentication(validate, http_client_config=http_client_config)
 
 
-def ask(prompt: str, model: str | None = None) -> str:
+def ask(
+    prompt: str,
+    model: str | None = None,
+    *,
+    http_client_config: HttpClientConfig | None = None,
+) -> str:
     """Send a prompt to GitHub Copilot and print the reply."""
-    return _with_reauthentication(lambda client: _ask_once(client, prompt, model))
+    return _with_reauthentication(
+        lambda client: _ask_once(client, prompt, model),
+        http_client_config=http_client_config,
+    )

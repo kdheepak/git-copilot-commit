@@ -3,6 +3,7 @@ git-copilot-commit - AI-powered Git commit assistant
 """
 
 from pathlib import Path
+from typing import Annotated
 
 import rich
 import typer
@@ -17,6 +18,27 @@ from . import github_copilot
 
 console = Console()
 app = typer.Typer(help=__doc__, add_completion=False)
+
+CA_BUNDLE_HELP = (
+    "Path to a custom CA bundle (PEM). Use this to test internal / company CAs."
+)
+NATIVE_TLS_HELP = (
+    "Use the OS's native certificate store via 'truststore' for httpx instead of "
+    "the Python bundle. Ignored if --ca-bundle or --insecure is used."
+)
+
+CaBundleOption = Annotated[
+    str | None,
+    typer.Option("--ca-bundle", metavar="PATH", help=CA_BUNDLE_HELP),
+]
+InsecureOption = Annotated[
+    bool,
+    typer.Option("--insecure", help="Disable SSL certificate verification."),
+]
+NativeTlsOption = Annotated[
+    bool,
+    typer.Option("--native-tls/--no-native-tls", help=NATIVE_TLS_HELP),
+]
 
 
 def version_callback(value: bool):
@@ -84,8 +106,24 @@ def load_system_prompt() -> str:
     raise typer.Exit(1)
 
 
+def build_http_client_config(
+    *,
+    ca_bundle: str | None,
+    insecure: bool,
+    native_tls: bool,
+) -> github_copilot.HttpClientConfig:
+    return github_copilot.HttpClientConfig(
+        native_tls=native_tls,
+        insecure=insecure,
+        ca_bundle=ca_bundle,
+    )
+
+
 def generate_commit_message(
-    repo: GitRepository, model: str | None = None, context: str = ""
+    repo: GitRepository,
+    model: str | None = None,
+    context: str = "",
+    http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> str:
     """Generate a conventional commit message using Copilot API."""
 
@@ -127,6 +165,7 @@ def generate_commit_message(
 {prompt}
             """,
         model=model,
+        http_client_config=http_client_config,
     )
 
 
@@ -157,10 +196,21 @@ def authenticate(
     force: bool = typer.Option(
         False, "--force", help="Replace cached GitHub Copilot credentials"
     ),
+    ca_bundle: CaBundleOption = None,
+    insecure: InsecureOption = False,
+    native_tls: NativeTlsOption = False,
 ):
     """Authenticate with GitHub Copilot and cache credentials locally."""
+    http_client_config = build_http_client_config(
+        ca_bundle=ca_bundle,
+        insecure=insecure,
+        native_tls=native_tls,
+    )
     try:
-        github_copilot.login(force=force)
+        github_copilot.login(
+            force=force,
+            http_client_config=http_client_config,
+        )
     except github_copilot.CopilotError as exc:
         console.print(f"[red]Authentication failed: {exc}[/red]")
         raise typer.Exit(1)
@@ -183,6 +233,9 @@ def commit(
         "-c",
         help="Optional user-provided context to guide commit message",
     ),
+    ca_bundle: CaBundleOption = None,
+    insecure: InsecureOption = False,
+    native_tls: NativeTlsOption = False,
 ):
     """
     Generate commit message based on changes in the current git repository and commit them.
@@ -198,9 +251,18 @@ def commit(
     except github_copilot.CopilotError:
         existing_credentials = None
 
+    http_client_config = build_http_client_config(
+        ca_bundle=ca_bundle,
+        insecure=insecure,
+        native_tls=native_tls,
+    )
+
     if existing_credentials is None:
         try:
-            github_copilot.login(force=True)
+            github_copilot.login(
+                force=True,
+                http_client_config=http_client_config,
+            )
         except github_copilot.CopilotError as exc:
             console.print(f"[red]Authentication failed: {exc}[/red]")
             raise typer.Exit(1)
@@ -248,13 +310,21 @@ def commit(
         )
 
     try:
-        github_copilot.ensure_auth_ready(model=model)
+        github_copilot.ensure_auth_ready(
+            model=model,
+            http_client_config=http_client_config,
+        )
 
         # Generate or use provided commit message
         with console.status(
             "[yellow]Generating commit message based on [bold]`git diff --staged`[/] ...[/yellow]"
         ):
-            commit_message = generate_commit_message(repo, model, context=context)
+            commit_message = generate_commit_message(
+                repo,
+                model,
+                context=context,
+                http_client_config=http_client_config,
+            )
     except github_copilot.CopilotError as exc:
         console.print(f"[red]Could not generate a commit message: {exc}[/red]")
         raise typer.Exit(1)
