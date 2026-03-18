@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Sequence, cast
 
 from .git import GitFile, GitStatus
 
@@ -280,7 +280,8 @@ def parse_split_plan_response(
         if not isinstance(commit_data, dict):
             raise SplitPlanningError(f"Commit {index} in the plan was not an object.")
 
-        raw_unit_ids = commit_data.get("unit_ids")
+        commit_object = cast(dict[str, Any], commit_data)
+        raw_unit_ids = commit_object.get("unit_ids")
         if not isinstance(raw_unit_ids, list) or not raw_unit_ids:
             raise SplitPlanningError(
                 f"Commit {index} must contain a non-empty `unit_ids` list."
