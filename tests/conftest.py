@@ -5,12 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
-
-SRC_DIR = Path(__file__).resolve().parents[1] / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-from git_copilot_commit.git import GitRepository
+from git_copilot_commit.git import GitRepository  # noqa: E402
 
 
 def run_git(repo_path: Path, *args: str) -> str:
