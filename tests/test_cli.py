@@ -292,10 +292,10 @@ def test_load_system_prompt_and_resolve_prompt_file_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    prompt_file = tmp_path / "prompt.md"
-    prompt_file.write_text("system prompt", encoding="utf-8")
-
-    assert load_system_prompt(prompt_file) == "system prompt"
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    prompt_path = prompt_dir / "default.md"
+    prompt_path.write_text("system prompt", encoding="utf-8")
 
     class FakeSettings:
         config_file = tmp_path / "config.json"
@@ -307,11 +307,12 @@ def test_load_system_prompt_and_resolve_prompt_file_success(
     monkeypatch.setattr(cli, "Settings", FakeSettings)
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    assert resolve_prompt_file() == tmp_path / "prompts" / "default.md"
+    assert resolve_prompt_file() == prompt_path
+    assert load_system_prompt() == "system prompt"
 
-    missing_prompt = tmp_path / "missing.md"
+    prompt_path.unlink()
     with pytest.raises(typer.Exit):
-        load_system_prompt(missing_prompt)
+        load_system_prompt()
 
 
 def test_commit_with_retry_no_verify_retries_and_can_abort(

@@ -50,9 +50,6 @@ NATIVE_TLS_HELP = (
     "Use the OS's native certificate store via 'truststore' for httpx instead of "
     "the Python bundle. Ignored if --ca-bundle or --insecure is used."
 )
-PROMPT_FILE_HELP = (
-    "Path to a Markdown file to use as the system prompt instead of the default prompt."
-)
 
 CaBundleOption = Annotated[
     str | None,
@@ -66,30 +63,24 @@ NativeTlsOption = Annotated[
     bool,
     typer.Option("--native-tls/--no-native-tls", help=NATIVE_TLS_HELP),
 ]
-PromptFileOption = Annotated[
-    Path | None,
-    typer.Option(
-        "--prompt-file",
-        metavar="PATH",
-        dir_okay=False,
-        resolve_path=True,
-        help=PROMPT_FILE_HELP,
-    ),
-]
+
 
 SplitOption = Annotated[
     bool,
     typer.Option(
         "--split",
-        help="Split staged hunks into multiple commits when the changes support it.",
+        help=(
+            "Split staged hunks into multiple commits automatically. Pass "
+            "`--split=N` to prefer up to N commits."
+        ),
     ),
 ]
-MaxCommitsOption = Annotated[
-    int,
+SplitCountOption = Annotated[
+    int | None,
     typer.Option(
-        "--max-commits",
+        "--split-count",
+        hidden=True,
         min=1,
-        help="Maximum number of commits to generate when using --split.",
     ),
 ]
 
@@ -142,10 +133,7 @@ def get_prompt_locations(filename: str):
     ]
 
 
-def resolve_prompt_file(prompt_file: Path | None = None) -> Path | None:
-    if prompt_file is not None:
-        return prompt_file.expanduser()
-
+def resolve_prompt_file() -> Path | None:
     settings = Settings()
     try:
         configured_prompt_file = settings.default_prompt_file
@@ -161,9 +149,9 @@ def resolve_prompt_file(prompt_file: Path | None = None) -> Path | None:
     return Path(configured_prompt_file).expanduser()
 
 
-def load_system_prompt(prompt_file: Path | None = None) -> str:
+def load_system_prompt() -> str:
     """Load the system prompt from the markdown file."""
-    resolved_prompt_file = resolve_prompt_file(prompt_file)
+    resolved_prompt_file = resolve_prompt_file()
     if resolved_prompt_file is not None:
         try:
             return resolved_prompt_file.read_text(encoding="utf-8")
@@ -272,12 +260,11 @@ def ask_copilot_with_system_prompt(
 def generate_commit_message_for_prompt(
     prompt: str,
     model: str | None = None,
-    prompt_file: Path | None = None,
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> str:
     """Generate a conventional commit message from a prepared prompt."""
     return ask_copilot_with_system_prompt(
-        load_system_prompt(prompt_file),
+        load_system_prompt(),
         prompt,
         model=model,
         http_client_config=http_client_config,
@@ -288,7 +275,6 @@ def generate_commit_message_for_status(
     status: GitStatus,
     model: str | None = None,
     context: str = "",
-    prompt_file: Path | None = None,
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> str:
     """Generate a commit message for a staged status snapshot."""
@@ -296,7 +282,6 @@ def generate_commit_message_for_status(
     return generate_commit_message_for_prompt(
         prompt,
         model=model,
-        prompt_file=prompt_file,
         http_client_config=http_client_config,
     )
 
@@ -305,7 +290,6 @@ def generate_commit_message(
     repo: GitRepository,
     model: str | None = None,
     context: str = "",
-    prompt_file: Path | None = None,
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> str:
     """Generate a conventional commit message using the repository's staged diff."""
@@ -313,7 +297,6 @@ def generate_commit_message(
         repo.get_status(),
         model=model,
         context=context,
-        prompt_file=prompt_file,
         http_client_config=http_client_config,
     )
 
@@ -400,7 +383,6 @@ def request_commit_message(
     status: GitStatus,
     model: str | None = None,
     context: str = "",
-    prompt_file: Path | None = None,
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> str:
     """Request a commit message for the provided staged state."""
@@ -412,7 +394,6 @@ def request_commit_message(
                 status,
                 model=model,
                 context=context,
-                prompt_file=prompt_file,
                 http_client_config=http_client_config,
             )
     except github_copilot.CopilotError as exc:
@@ -463,7 +444,6 @@ def request_split_commit_messages(
     *,
     model: str | None = None,
     context: str = "",
-    prompt_file: Path | None = None,
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> list[PreparedSplitCommit]:
     """Generate commit messages for each planned split-commit group."""
@@ -480,7 +460,6 @@ def request_split_commit_messages(
                     build_status_for_patch_units(unit_group),
                     model=model,
                     context=context,
-                    prompt_file=prompt_file,
                     http_client_config=http_client_config,
                 )
 
@@ -641,7 +620,6 @@ def handle_single_commit_flow(
     model: str | None = None,
     yes: bool = False,
     context: str = "",
-    prompt_file: Path | None = None,
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> None:
     """Generate, display, and execute the single-commit flow."""
@@ -649,7 +627,6 @@ def handle_single_commit_flow(
         status,
         model=model,
         context=context,
-        prompt_file=prompt_file,
         http_client_config=http_client_config,
     )
     display_commit_message(commit_message)
@@ -726,7 +703,6 @@ def handle_split_commit_flow(
             model=model,
             yes=yes,
             context=context,
-            prompt_file=prompt_file,
             http_client_config=http_client_config,
         )
         return
@@ -736,7 +712,6 @@ def handle_split_commit_flow(
         patch_units,
         model=model,
         context=context,
-        prompt_file=prompt_file,
         http_client_config=http_client_config,
     )
 
@@ -863,7 +838,6 @@ def commit(
         "-c",
         help="Optional user-provided context to guide commit message",
     ),
-    prompt_file: PromptFileOption = None,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
     native_tls: NativeTlsOption = False,
@@ -919,7 +893,6 @@ def commit(
             model=model,
             yes=yes,
             context=context,
-            prompt_file=prompt_file,
             http_client_config=http_client_config,
         )
         return
@@ -930,10 +903,9 @@ def commit(
         model=model,
         yes=yes,
         context=context,
-        prompt_file=prompt_file,
         http_client_config=http_client_config,
     )
 
 
 if __name__ == "__main__":
-    app()
+    run()
