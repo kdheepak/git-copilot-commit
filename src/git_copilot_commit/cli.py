@@ -19,9 +19,7 @@ from . import github_copilot
 console = Console()
 app = typer.Typer(help=__doc__, add_completion=False)
 
-CA_BUNDLE_HELP = (
-    "Path to a custom CA bundle (PEM). Use this to test internal / company CAs."
-)
+CA_BUNDLE_HELP = "Path to a custom CA bundle (PEM)"
 NATIVE_TLS_HELP = (
     "Use the OS's native certificate store via 'truststore' for httpx instead of "
     "the Python bundle. Ignored if --ca-bundle or --insecure is used."
