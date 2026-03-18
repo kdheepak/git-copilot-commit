@@ -1,12 +1,25 @@
 import pytest
 from git_copilot_commit.git import GitFile, GitStatus
 from git_copilot_commit.split_commits import (
+    FilePatch,
     SplitCommitLimitExceededError,
     SplitPlanningError,
     build_split_plan_prompt,
     build_status_for_patch_units,
+    classify_file_patch,
+    count_patch_changes,
     extract_patch_units,
+    find_duplicates,
+    group_patch_units,
+    parse_diff_paths,
+    parse_file_patch,
+    parse_json_payload,
     parse_split_plan_response,
+    should_split_file_patch,
+    summarize_file_patch,
+    summarize_hunk,
+    SplitCommitPlan,
+    SplitPlanCommit,
 )
 
 MULTI_FILE_DIFF = """\
@@ -143,3 +156,134 @@ def test_parse_split_plan_response_raises_limit_error_with_validated_plan() -> N
         ("u2",),
         ("u3",),
     ]
+
+
+def test_parse_json_payload_supports_code_fences_and_embedded_objects() -> None:
+    fenced = parse_json_payload(
+        """```json
+        {"commits": [{"unit_ids": ["u1"]}]}
+        ```"""
+    )
+    embedded = parse_json_payload(
+        'Planner output:\n{"commits":[{"unit_ids":["u1","u2"]}]}\nThanks.'
+    )
+
+    assert fenced == {"commits": [{"unit_ids": ["u1"]}]}
+    assert embedded == {"commits": [{"unit_ids": ["u1", "u2"]}]}
+
+    with pytest.raises(SplitPlanningError):
+        parse_json_payload("")
+
+
+def test_parse_diff_paths_and_parse_file_patch_support_quoted_paths() -> None:
+    header = 'diff --git "a/docs/my file.md" "b/docs/my file.md"'
+
+    assert parse_diff_paths(header) == ("docs/my file.md", "docs/my file.md")
+
+    file_patch = parse_file_patch(
+        """\
+diff --git "a/docs/my file.md" "b/docs/my file.md"
+index 1111111..2222222 100644
+--- "a/docs/my file.md"
++++ "b/docs/my file.md"
+@@ -1 +1 @@
+-old
++new
+"""
+    )
+    assert file_patch.display_path == "docs/my file.md"
+    assert file_patch.kind == "file"
+    assert len(file_patch.hunks) == 1
+    assert not should_split_file_patch(file_patch)
+
+    with pytest.raises(SplitPlanningError):
+        parse_diff_paths("diff --git only-one-path")
+
+
+def test_classify_and_summarize_special_patch_kinds() -> None:
+    assert classify_file_patch(
+        ["diff --git a/file.bin b/file.bin\n", "GIT binary patch\n"],
+        "file.bin",
+        "file.bin",
+        [],
+    ) == ("M", "binary")
+    assert classify_file_patch(
+        ["rename from old.txt\n", "rename to new.txt\n"],
+        "old.txt",
+        "new.txt",
+        [],
+    ) == ("R", "rename")
+    assert classify_file_patch(
+        ["old mode 100644\n", "new mode 100755\n"],
+        "script.sh",
+        "script.sh",
+        [],
+    ) == ("M", "mode_change")
+    assert classify_file_patch(
+        ["diff --git a/file.txt b/file.txt\n"],
+        "file.txt",
+        "file.txt",
+        [],
+    ) == ("M", "metadata")
+
+    rename_patch = FilePatch(
+        old_path="old.txt",
+        new_path="new.txt",
+        display_path="new.txt",
+        staged_status="R",
+        kind="rename",
+        raw_patch="diff --git a/old.txt b/new.txt\n",
+        header="diff --git a/old.txt b/new.txt\n",
+        hunks=(),
+    )
+    mode_patch = FilePatch(
+        old_path="script.sh",
+        new_path="script.sh",
+        display_path="script.sh",
+        staged_status="M",
+        kind="mode_change",
+        raw_patch="diff --git a/script.sh b/script.sh\nold mode 100644\nnew mode 100755\n",
+        header="diff --git a/script.sh b/script.sh\n",
+        hunks=(),
+    )
+
+    assert summarize_file_patch(rename_patch) == "rename old.txt -> new.txt"
+    assert summarize_file_patch(mode_patch) == "mode change script.sh"
+    assert summarize_hunk(
+        "src/app.py",
+        2,
+        3,
+        "@@ -1 +1 @@\n-old\n+new\n",
+    ) == "src/app.py hunk 2/3 @@ -1 +1 @@ (+1/-1)"
+
+
+def test_count_patch_changes_find_duplicates_and_group_patch_units() -> None:
+    assert count_patch_changes(
+        """\
+--- a/file.txt
++++ b/file.txt
++added
+-removed
+ context
+"""
+    ) == (1, 1)
+    assert find_duplicates(["u1", "u2", "u1", "u3", "u2"]) == {"u1", "u2"}
+
+    units = extract_patch_units(MULTI_FILE_DIFF)
+    grouped = group_patch_units(
+        units,
+        SplitCommitPlan(
+            commits=(
+                SplitPlanCommit(("u3",)),
+                SplitPlanCommit(("u1", "u2")),
+            )
+        ),
+    )
+
+    assert [unit.id for unit in grouped[0]] == ["u3"]
+    assert [unit.id for unit in grouped[1]] == ["u1", "u2"]
+
+
+def test_build_split_plan_prompt_requires_patch_units() -> None:
+    with pytest.raises(SplitPlanningError):
+        build_split_plan_prompt(make_status(), [], max_commits=2)
