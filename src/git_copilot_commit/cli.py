@@ -4,6 +4,7 @@ git-copilot-commit - AI-powered Git commit assistant
 
 from pathlib import Path
 from typing import Annotated
+import os
 
 import rich
 import typer
@@ -110,6 +111,8 @@ def build_http_client_config(
     insecure: bool,
     native_tls: bool,
 ) -> github_copilot.HttpClientConfig:
+    if ca_bundle is not None:
+        ca_bundle = os.path.expanduser(ca_bundle)
     return github_copilot.HttpClientConfig(
         native_tls=native_tls,
         insecure=insecure,
