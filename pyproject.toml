@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-git-copilot-commit = "git_copilot_commit.cli:app"
+git-copilot-commit = "git_copilot_commit.cli:run"
 
 [build-system]
 requires = ["hatchling", "versioningit"]

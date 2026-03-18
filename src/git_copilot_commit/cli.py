@@ -4,14 +4,16 @@ git-copilot-commit - AI-powered Git commit assistant
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
 import os
+import sys
+from typing import Annotated, Sequence
 
 import rich
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
+from typer.main import get_command
 
 from .git import GitRepository, GitError, GitStatus, NotAGitRepositoryError
 from .split_commits import (
@@ -91,6 +93,68 @@ class PreparedSplitCommit:
 
     message: str
     patch_units: tuple[PatchUnit, ...]
+
+
+def preprocess_cli_args(args: Sequence[str]) -> list[str]:
+    """Normalize CLI arguments before Click parses them."""
+    processed_args: list[str] = []
+    in_commit_command = False
+    index = 0
+
+    while index < len(args):
+        arg = args[index]
+
+        if not in_commit_command and not arg.startswith("-"):
+            processed_args.append(arg)
+            if arg == "commit":
+                in_commit_command = True
+            index += 1
+            continue
+
+        if in_commit_command and arg.startswith("--split="):
+            split_value = arg.split("=", 1)[1].strip().lower()
+            if split_value == "auto":
+                processed_args.append("--split")
+                index += 1
+                continue
+            if split_value.isdigit():
+                processed_args.extend(["--split-count", split_value])
+                index += 1
+                continue
+
+            processed_args.append(arg)
+            index += 1
+            continue
+
+        if (
+            in_commit_command
+            and arg == "--split"
+            and index + 1 < len(args)
+        ):
+            split_value = args[index + 1].strip().lower()
+            if split_value == "auto":
+                processed_args.append("--split")
+                index += 2
+                continue
+            if split_value.isdigit():
+                processed_args.extend(["--split-count", split_value])
+                index += 2
+                continue
+
+        processed_args.append(arg)
+        index += 1
+
+    return processed_args
+
+
+def run(args: Sequence[str] | None = None) -> None:
+    """Run the CLI entrypoint with argument normalization."""
+    raw_args = list(args) if args is not None else sys.argv[1:]
+    command = get_command(app)
+    command.main(
+        args=preprocess_cli_args(raw_args),
+        prog_name=Path(sys.argv[0]).name,
+    )
 
 
 def version_callback(value: bool):
