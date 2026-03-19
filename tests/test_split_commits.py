@@ -2,13 +2,11 @@ import pytest  # noqa: F401
 from git_copilot_commit.git import GitFile, GitStatus
 from git_copilot_commit.split_commits import (
     FilePatch,
-    PatchUnit,
     SplitPlanningError,
     build_split_plan_prompt,
     build_status_for_patch_units,
     classify_file_patch,
     count_patch_changes,
-    evaluate_auto_split,
     extract_patch_units,
     find_duplicates,
     group_patch_units,
@@ -145,6 +143,7 @@ def test_parse_split_plan_response_rejects_duplicate_or_missing_units() -> None:
             '{"commits":[{"unit_ids":["u1"]},{"unit_ids":["u3"]}]}',
             units,
         )
+
 
 def test_parse_split_plan_response_allows_more_than_preferred_commits() -> None:
     units = extract_patch_units(MULTI_FILE_DIFF)
@@ -304,62 +303,3 @@ def test_count_patch_changes_find_duplicates_and_group_patch_units() -> None:
 def test_build_split_plan_prompt_requires_patch_units() -> None:
     with pytest.raises(SplitPlanningError):
         build_split_plan_prompt(make_status(), [])
-
-
-def test_evaluate_auto_split_is_conservative_for_small_similar_changes() -> None:
-    units = (
-        PatchUnit(
-            id="u1",
-            order=0,
-            path="src/app.py",
-            staged_status="M",
-            kind="hunk",
-            patch="patch 1",
-            summary="summary 1",
-        ),
-        PatchUnit(
-            id="u2",
-            order=1,
-            path="src/app.py",
-            staged_status="M",
-            kind="hunk",
-            patch="patch 2",
-            summary="summary 2",
-        ),
-    )
-
-    should_split, reason = evaluate_auto_split(units)
-
-    assert not should_split
-    assert reason == "found only 2 similar patch units"
-
-
-def test_evaluate_auto_split_detects_large_or_mixed_changes() -> None:
-    many_units = extract_patch_units(MULTI_FILE_DIFF)
-    should_split_many, reason_many = evaluate_auto_split(many_units)
-    assert should_split_many
-    assert reason_many == "found 3 independent patch units"
-
-    mixed_units = (
-        PatchUnit(
-            id="u1",
-            order=0,
-            path="src/app.py",
-            staged_status="M",
-            kind="hunk",
-            patch="patch 1",
-            summary="summary 1",
-        ),
-        PatchUnit(
-            id="u2",
-            order=1,
-            path="README.md",
-            staged_status="A",
-            kind="new_file",
-            patch="patch 2",
-            summary="summary 2",
-        ),
-    )
-    should_split_mixed, reason_mixed = evaluate_auto_split(mixed_units)
-    assert should_split_mixed
-    assert reason_mixed == "found mixed change kinds (hunk, new_file)"

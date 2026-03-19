@@ -544,7 +544,7 @@ def test_handle_split_commit_flow_falls_back_to_single_commit(
     fallback.assert_called_once()
 
 
-def test_handle_split_commit_flow_auto_mode_can_skip_split_planning(
+def test_handle_split_commit_flow_auto_mode_always_requests_split_planning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = Mock()
@@ -573,10 +573,22 @@ def test_handle_split_commit_flow_auto_mode_can_skip_split_planning(
         ),
     )
     fallback = Mock()
-    planner = Mock()
+    split_plan = SplitCommitPlan(commits=(SplitPlanCommit(("u1", "u2")),))
+    planner = Mock(return_value=split_plan)
+    request_messages = Mock(
+        return_value=[
+            PreparedSplitCommit(
+                message="feat: keep both changes together",
+                patch_units=patch_units,
+            )
+        ]
+    )
     monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
     monkeypatch.setattr(cli, "request_split_commit_plan", planner)
+    monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
     monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "display_commit_message", Mock())
+    monkeypatch.setattr(cli, "execute_commit_action", Mock(return_value="deadbeef"))
 
     handle_split_commit_flow(
         repo,
@@ -584,8 +596,15 @@ def test_handle_split_commit_flow_auto_mode_can_skip_split_planning(
         model="gpt-5.4",
     )
 
-    fallback.assert_called_once()
-    planner.assert_not_called()
+    fallback.assert_not_called()
+    planner.assert_called_once_with(
+        status,
+        patch_units,
+        preferred_commits=None,
+        model="gpt-5.4",
+        context="",
+        http_client_config=None,
+    )
 
 
 def test_handle_split_commit_flow_handles_invalid_plan_and_single_commit_result(
@@ -898,9 +917,7 @@ def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
     )
     monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
     request_plan = Mock(
-        return_value=SplitCommitPlan(
-            commits=(SplitPlanCommit(("u1", "u2")),)
-        )
+        return_value=SplitCommitPlan(commits=(SplitPlanCommit(("u1", "u2")),))
     )
     request_messages = Mock(
         return_value=[

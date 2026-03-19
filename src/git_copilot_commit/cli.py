@@ -22,7 +22,6 @@ from .split_commits import (
     SplitPlanningError,
     build_split_plan_prompt,
     build_status_for_patch_units,
-    evaluate_auto_split,
     extract_patch_units,
     group_patch_units,
     parse_split_plan_response,
@@ -729,23 +728,9 @@ def handle_split_commit_flow(
         return
 
     if preferred_commits is None:
-        should_split, reason = evaluate_auto_split(patch_units)
-        if not should_split:
-            console.print(
-                "[yellow]Auto split not triggered: "
-                f"{reason}. Creating a single commit. Use [bold]--split N[/] to express a preferred commit count.[/yellow]"
-            )
-            handle_single_commit_flow(
-                repo,
-                status,
-                model=model,
-                yes=yes,
-                context=context,
-                http_client_config=http_client_config,
-            )
-            return
-
-        console.print(f"[yellow]Auto split triggered: {reason}.[/yellow]")
+        console.print(
+            "[yellow]Planning split commits from the staged patch units.[/yellow]"
+        )
     else:
         console.print(
             "[yellow]Planning split commits with a preference for "
