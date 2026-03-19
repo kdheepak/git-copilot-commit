@@ -121,16 +121,31 @@ class GitRepository:
         Raises:
             NotAGitRepositoryError: If the path is not a git repository.
         """
-        self.repo_path = repo_path or Path.cwd()
+        self.cwd = (repo_path or Path.cwd()).resolve()
         self.timeout = timeout
-        self._validate_git_repo()
+        self.repo_path = self._resolve_repo_root()
 
-    def _validate_git_repo(self) -> None:
-        """Ensure we're in a git repository."""
+    def _resolve_repo_root(self) -> Path:
+        """Resolve and cache the repository top-level path."""
         try:
-            self._run_git_command(["rev-parse", "--git-dir"])
-        except GitCommandError:
-            raise NotAGitRepositoryError(f"{self.repo_path} is not a git repository")
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=self.cwd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            raise NotAGitRepositoryError(f"{self.cwd} is not a git repository")
+        except subprocess.TimeoutExpired:
+            raise GitCommandError("Git command timed out: git rev-parse --show-toplevel")
+
+        repo_root = result.stdout.strip()
+        if not repo_root:
+            raise NotAGitRepositoryError(f"{self.cwd} is not a git repository")
+
+        return Path(repo_root)
 
     def _run_git_command(
         self,
@@ -187,6 +202,21 @@ class GitRepository:
         merged_env = os.environ.copy()
         merged_env.update(env)
         return merged_env
+
+    def _normalize_paths(self, paths: list[str]) -> list[str]:
+        """Normalize user paths relative to the repository root."""
+        normalized_paths: list[str] = []
+        for path in paths:
+            path_obj = Path(path)
+            if path_obj.is_absolute():
+                normalized_paths.append(str(path_obj))
+                continue
+
+            normalized_paths.append(
+                os.path.relpath(self.cwd / path_obj, start=self.repo_path)
+            )
+
+        return normalized_paths
 
     def get_status(self, env: Mapping[str, str] | None = None) -> GitStatus:
         """
@@ -263,16 +293,16 @@ class GitRepository:
         Stage files for commit.
 
         Args:
-          paths: List of file paths to stage. If None, stages all files (git add .).
+          paths: List of file paths to stage. If None, stages all files.
         """
         if paths is None:
-            self._run_git_command(["add", "."])
+            self._run_git_command(["add", "--all"])
         else:
-            self._run_git_command(["add"] + paths)
+            self._run_git_command(["add"] + self._normalize_paths(paths))
 
     def stage_modified(self) -> None:
-        """Stage all modified files (git add -u)."""
-        self._run_git_command(["add", "-u"])
+        """Stage all modified tracked files."""
+        self._run_git_command(["add", "--update"])
 
     def unstage_files(self, paths: list[str] | None = None) -> None:
         """
@@ -284,7 +314,7 @@ class GitRepository:
         if paths is None:
             self._run_git_command(["reset", "HEAD"])
         else:
-            self._run_git_command(["reset", "HEAD"] + paths)
+            self._run_git_command(["reset", "HEAD"] + self._normalize_paths(paths))
 
     def create_alternate_index(self, from_ref: str = "HEAD") -> AlternateGitIndex:
         """Create a temporary git index initialized from the provided ref."""

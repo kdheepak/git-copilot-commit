@@ -433,6 +433,51 @@ def test_stage_changes_for_commit_all_files_short_circuit() -> None:
     repo.stage_files.assert_called_once_with()
 
 
+def test_commit_command_from_subdirectory_stages_the_entire_repository(
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = cli.GitRepository(git_repo_path)
+    frontend_dir = git_repo_path / "frontend"
+    backend_dir = git_repo_path / "backend"
+    frontend_dir.mkdir()
+    backend_dir.mkdir()
+    frontend_file = frontend_dir / "component.py"
+    backend_file = backend_dir / "service.py"
+
+    frontend_file.write_text("print('frontend v1')\n", encoding="utf-8")
+    backend_file.write_text("print('backend v1')\n", encoding="utf-8")
+    repo.stage_files()
+    repo.commit("chore: init", no_verify=True)
+
+    frontend_file.write_text("print('frontend v2')\n", encoding="utf-8")
+    backend_file.write_text("print('backend v2')\n", encoding="utf-8")
+
+    monkeypatch.chdir(frontend_dir)
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+    monkeypatch.setattr(cli, "ensure_copilot_authentication", lambda _config: None)
+    monkeypatch.setattr(
+        cli.github_copilot,
+        "ensure_auth_ready",
+        lambda **_kwargs: github_copilot.CopilotModel(
+            id="gpt-5.4",
+            name="GPT-5.4",
+            vendor="openai",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "request_commit_message",
+        lambda *_args, **_kwargs: "chore: commit nested changes",
+    )
+
+    result = runner.invoke(cli.app, ["commit", "--all", "--yes"])
+
+    assert result.exit_code == 0
+    assert repo.get_recent_commits(limit=1)[0][1] == "chore: commit nested changes"
+    assert not repo.get_status().files
+
+
 def test_execute_split_commit_plan_creates_multiple_commits(
     git_repo,
     git_repo_path,

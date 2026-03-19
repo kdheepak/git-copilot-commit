@@ -2,7 +2,7 @@ import re
 
 import pytest  # noqa: F401
 
-from git_copilot_commit.git import GitFile, GitStatus
+from git_copilot_commit.git import GitFile, GitRepository, GitStatus
 
 FIRST_PATCH = """\
 diff --git a/file.txt b/file.txt
@@ -121,6 +121,68 @@ def test_git_file_and_status_helper_properties() -> None:
     assert [file.path for file in status.unstaged_files] == ["unstaged.py"]
     assert [file.path for file in status.untracked_files] == ["new.py"]
     assert status.get_porcelain_output() == "M  staged.py\n M unstaged.py\n?? new.py"
+
+
+def test_stage_files_from_subdirectory_stages_the_entire_repository(
+    git_repo_path,
+) -> None:
+    repo = GitRepository(git_repo_path)
+    frontend_dir = git_repo_path / "frontend"
+    backend_dir = git_repo_path / "backend"
+    frontend_dir.mkdir()
+    backend_dir.mkdir()
+    frontend_file = frontend_dir / "component.py"
+    backend_file = backend_dir / "service.py"
+
+    frontend_file.write_text("print('frontend v1')\n", encoding="utf-8")
+    backend_file.write_text("print('backend v1')\n", encoding="utf-8")
+    repo.stage_files()
+    repo.commit("init", no_verify=True)
+
+    frontend_file.write_text("print('frontend v2')\n", encoding="utf-8")
+    backend_file.write_text("print('backend v2')\n", encoding="utf-8")
+
+    nested_repo = GitRepository(frontend_dir)
+    nested_repo.stage_files()
+
+    status = nested_repo.get_status()
+
+    assert [file.path for file in status.staged_files] == [
+        "backend/service.py",
+        "frontend/component.py",
+    ]
+    assert not status.has_unstaged_changes
+
+
+def test_stage_modified_from_subdirectory_updates_the_entire_repository(
+    git_repo_path,
+) -> None:
+    repo = GitRepository(git_repo_path)
+    frontend_dir = git_repo_path / "frontend"
+    backend_dir = git_repo_path / "backend"
+    frontend_dir.mkdir()
+    backend_dir.mkdir()
+    frontend_file = frontend_dir / "component.py"
+    backend_file = backend_dir / "service.py"
+
+    frontend_file.write_text("print('frontend v1')\n", encoding="utf-8")
+    backend_file.write_text("print('backend v1')\n", encoding="utf-8")
+    repo.stage_files()
+    repo.commit("init", no_verify=True)
+
+    frontend_file.write_text("print('frontend v2')\n", encoding="utf-8")
+    backend_file.write_text("print('backend v2')\n", encoding="utf-8")
+
+    nested_repo = GitRepository(frontend_dir)
+    nested_repo.stage_modified()
+
+    status = nested_repo.get_status()
+
+    assert [file.path for file in status.staged_files] == [
+        "backend/service.py",
+        "frontend/component.py",
+    ]
+    assert not status.has_unstaged_changes
 
 
 def test_parse_status_output_build_env_and_commit_validation(git_repo) -> None:
