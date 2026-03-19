@@ -21,16 +21,16 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Install the project
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --locked --all-extras --group testing
 
       - name: Run linting
         run: uv run --with ruff ruff check
 
       - name: Run type checking
-        run: uv run --with ty ty check
+        run: uv run --group testing --with ty ty check
 
       - name: Run tests
-        run: uv run pytest
+        run: uv run --group testing pytest
 
   publish:
     if: github.event_name == 'release' && github.event.action == 'published'
