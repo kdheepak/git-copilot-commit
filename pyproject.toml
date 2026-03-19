@@ -44,8 +44,10 @@ dirty = "{base_version}+d{build_date:%Y%m%d}"
 distance-dirty = "{next_version}.dev{distance}+{vcs}{rev}.d{build_date:%Y%m%d}"
 
 [dependency-groups]
-testing = [
+dev = [
     "pytest>=9.0.2",
+    "ruff>=0.13.0",
+    "ty>=0.0.1a17",
 ]
 # Example formatted version: 1.2.4.dev42+ge174a1f.d20230922
 
