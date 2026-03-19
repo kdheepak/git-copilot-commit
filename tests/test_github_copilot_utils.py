@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest  # noqa: F401
 from rich.console import Console
 
@@ -330,6 +332,128 @@ def test_extract_response_text_handles_text_refusals_and_errors() -> None:
 
     with pytest.raises(github_copilot.CopilotError):
         github_copilot.extract_response_text({"output": []})
+
+
+def test_request_json_retries_rate_limits_and_honors_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(github_copilot.time, "sleep", sleep_calls.append)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(
+                429,
+                headers={"retry-after": "2"},
+                text="rate limited",
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"ok": True},
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        payload = github_copilot.request_json(
+            client,
+            "GET",
+            "https://example.com/models",
+        )
+
+    assert payload == {"ok": True}
+    assert attempts == 2
+    assert sleep_calls == [2.0]
+
+
+def test_request_json_retries_transient_transport_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(github_copilot.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(github_copilot.random, "uniform", lambda _a, _b: 0.0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("temporary network issue", request=request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"ok": True},
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        payload = github_copilot.request_json(
+            client,
+            "GET",
+            "https://example.com/models",
+        )
+
+    assert payload == {"ok": True}
+    assert attempts == 2
+    assert sleep_calls == [github_copilot.HTTP_RETRY_BASE_DELAY_SECONDS]
+
+
+def test_responses_completion_retries_retryable_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(github_copilot.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(github_copilot.random, "uniform", lambda _a, _b: 0.0)
+
+    credentials = github_copilot.CopilotCredentials(
+        github_access_token="ghu_123",
+        copilot_token="copilot-token",
+        copilot_expires_at=2_000_000_000,
+    )
+    model = make_model(
+        "gpt-5.4",
+        vendor="openai",
+        family="gpt-5",
+        endpoints=("/responses",),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, text="service unavailable", request=request)
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                "event: response.output_text.delta\n"
+                'data: {"delta":"feat: add retries"}\n\n'
+                "event: response.completed\n"
+                'data: {"response":{"status":"completed"}}\n\n'
+            ),
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        completion = github_copilot.responses_completion(
+            client,
+            credentials,
+            model=model,
+            prompt="Write a commit message",
+        )
+
+    assert completion == "feat: add retries"
+    assert attempts == 2
+    assert sleep_calls == [github_copilot.HTTP_RETRY_BASE_DELAY_SECONDS]
 
 
 def test_render_model_selection_error_and_time_formatting(

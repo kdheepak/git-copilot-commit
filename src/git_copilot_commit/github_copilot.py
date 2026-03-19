@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import random
 import re
 import secrets
 import time
@@ -33,6 +34,11 @@ CLIENT_ID = base64.b64decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=").decode()
 INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2
 SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4
 DEFAULT_MODEL_ID = "gpt-5.3-codex"
+HTTP_RETRY_ATTEMPTS = 3
+HTTP_RETRY_BASE_DELAY_SECONDS = 0.5
+HTTP_RETRY_MAX_DELAY_SECONDS = 4.0
+HTTP_RETRY_MAX_JITTER_SECONDS = 0.25
+HTTP_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 DEFAULT_MODEL_PREFERENCES = (
     "gpt-5.3-codex",
     "gpt-5.4",
@@ -266,6 +272,7 @@ class CopilotConfig:
 
         return cls(default_model=default_model)
 
+
 def credentials_path() -> Path:
     return Settings().state_dir / CREDENTIALS_FILENAME
 
@@ -357,7 +364,9 @@ def _maybe_enable_native_tls(native_tls: bool) -> None:
     _NATIVE_TLS_ENABLED = True
 
 
-def make_http_client(http_client_config: HttpClientConfig | None = None) -> httpx.Client:
+def make_http_client(
+    http_client_config: HttpClientConfig | None = None,
+) -> httpx.Client:
     config = http_client_config or HttpClientConfig()
     _maybe_enable_native_tls(config.use_native_tls)
 
@@ -366,6 +375,34 @@ def make_http_client(http_client_config: HttpClientConfig | None = None) -> http
         follow_redirects=True,
         timeout=httpx.Timeout(30.0, connect=10.0),
     )
+
+
+def truncate_response_detail(detail: str) -> str:
+    detail = detail.strip()
+    if len(detail) > 400:
+        return f"{detail[:397]}..."
+    return detail
+
+
+def should_retry_status_code(status_code: int) -> bool:
+    return status_code in HTTP_RETRYABLE_STATUS_CODES
+
+
+def compute_retry_delay_seconds(attempt: int, retry_after: str | None = None) -> float:
+    if retry_after is not None:
+        try:
+            delay = float(retry_after.strip())
+        except ValueError:
+            delay = -1.0
+        else:
+            if delay >= 0:
+                return delay
+
+    backoff = min(
+        HTTP_RETRY_MAX_DELAY_SECONDS,
+        HTTP_RETRY_BASE_DELAY_SECONDS * (2**attempt),
+    )
+    return backoff + random.uniform(0.0, HTTP_RETRY_MAX_JITTER_SECONDS)
 
 
 def request_json(
@@ -377,31 +414,48 @@ def request_json(
     data: dict[str, str] | None = None,
     json_body: Any | None = None,
 ) -> Any:
-    try:
-        response = client.request(
-            method,
-            url,
-            headers=headers,
-            data=data,
-            json=json_body,
-        )
-    except httpx.HTTPError as exc:
-        raise CopilotError(f"Request failed for {url}: {exc}") from exc
+    for attempt in range(HTTP_RETRY_ATTEMPTS):
+        try:
+            response = client.request(
+                method,
+                url,
+                headers=headers,
+                data=data,
+                json=json_body,
+            )
+        except httpx.TransportError as exc:
+            if attempt < HTTP_RETRY_ATTEMPTS - 1:
+                time.sleep(compute_retry_delay_seconds(attempt))
+                continue
+            raise CopilotError(f"Request failed for {url}: {exc}") from exc
+        except httpx.HTTPError as exc:
+            raise CopilotError(f"Request failed for {url}: {exc}") from exc
 
-    if response.is_error:
-        detail = response.text.strip()
-        if len(detail) > 400:
-            detail = f"{detail[:397]}..."
-        raise CopilotHttpError(response.status_code, response.reason_phrase, detail)
+        if response.is_error:
+            detail = truncate_response_detail(response.text)
+            error = CopilotHttpError(
+                response.status_code, response.reason_phrase, detail
+            )
+            if (
+                should_retry_status_code(response.status_code)
+                and attempt < HTTP_RETRY_ATTEMPTS - 1
+            ):
+                time.sleep(
+                    compute_retry_delay_seconds(
+                        attempt, response.headers.get("retry-after")
+                    )
+                )
+                continue
+            raise error
+
+        break
 
     content_type = response.headers.get("content-type", "")
     if "application/json" not in content_type:
         try:
             return response.json()
         except ValueError as exc:
-            detail = response.text.strip()
-            if len(detail) > 400:
-                detail = f"{detail[:397]}..."
+            detail = truncate_response_detail(response.text)
             raise CopilotError(
                 f"Expected JSON from {url}, got {content_type or 'unknown content type'}: {detail}"
             ) from exc
@@ -1012,118 +1066,141 @@ def responses_completion(
         "store": False,
     }
 
-    text_parts: list[str] = []
-    final_response: dict[str, Any] | None = None
+    for attempt in range(HTTP_RETRY_ATTEMPTS):
+        text_parts: list[str] = []
+        final_response: dict[str, Any] | None = None
 
-    try:
-        with client.stream(
-            "POST",
-            url,
-            headers=copilot_request_headers(
-                credentials.copilot_token,
-                intent="conversation-edits",
-                accept="text/event-stream",
-            ),
-            json=request_body,
-        ) as response:
-            if response.is_error:
-                detail = response.read().decode("utf-8", errors="replace").strip()
-                if len(detail) > 400:
-                    detail = f"{detail[:397]}..."
-                raise CopilotHttpError(
-                    response.status_code, response.reason_phrase, detail
-                )
+        try:
+            with client.stream(
+                "POST",
+                url,
+                headers=copilot_request_headers(
+                    credentials.copilot_token,
+                    intent="conversation-edits",
+                    accept="text/event-stream",
+                ),
+                json=request_body,
+            ) as response:
+                if response.is_error:
+                    detail = truncate_response_detail(
+                        response.read().decode("utf-8", errors="replace")
+                    )
+                    error = CopilotHttpError(
+                        response.status_code, response.reason_phrase, detail
+                    )
+                    if (
+                        should_retry_status_code(response.status_code)
+                        and attempt < HTTP_RETRY_ATTEMPTS - 1
+                    ):
+                        time.sleep(
+                            compute_retry_delay_seconds(
+                                attempt, response.headers.get("retry-after")
+                            )
+                        )
+                        continue
+                    raise error
 
-            content_type = response.headers.get("content-type", "")
-            if "text/event-stream" not in content_type:
-                body = response.read()
-                try:
-                    payload = json.loads(body)
-                except ValueError as exc:
-                    detail = body.decode("utf-8", errors="replace").strip()
-                    if len(detail) > 400:
-                        detail = f"{detail[:397]}..."
+                content_type = response.headers.get("content-type", "")
+                if "text/event-stream" not in content_type:
+                    body = response.read()
+                    try:
+                        payload = json.loads(body)
+                    except ValueError as exc:
+                        detail = truncate_response_detail(
+                            body.decode("utf-8", errors="replace")
+                        )
+                        raise CopilotError(
+                            f"Expected an SSE stream from {url}, got {content_type or 'unknown content type'}: {detail}"
+                        ) from exc
+                    return extract_response_text(payload)
+
+                for event in iter_sse_events(response, url):
+                    if not isinstance(event, dict):
+                        continue
+
+                    event_type = event.get("type")
+                    if event_type == "response.output_text.delta":
+                        delta = event.get("delta")
+                        if isinstance(delta, str) and delta:
+                            text_parts.append(delta)
+                        continue
+
+                    if event_type == "response.output_text.done" and not text_parts:
+                        text = event.get("text")
+                        if isinstance(text, str) and text.strip():
+                            text_parts.append(text)
+                        continue
+
+                    if event_type == "error":
+                        error = event.get("error")
+                        if isinstance(error, dict):
+                            message = error.get("message")
+                            code = error.get("code")
+                            if isinstance(message, str) and message.strip():
+                                prefix = (
+                                    f"{code}: "
+                                    if isinstance(code, str) and code
+                                    else ""
+                                )
+                                raise CopilotError(
+                                    f"Responses stream error: {prefix}{message.strip()}"
+                                )
+                        raise CopilotError("Responses stream returned an error event.")
+
+                    if event_type in {
+                        "response.completed",
+                        "response.failed",
+                        "response.incomplete",
+                    }:
+                        response_payload = event.get("response")
+                        if isinstance(response_payload, dict):
+                            final_response = response_payload
+        except httpx.TransportError as exc:
+            if attempt < HTTP_RETRY_ATTEMPTS - 1:
+                time.sleep(compute_retry_delay_seconds(attempt))
+                continue
+            raise CopilotError(f"Request failed for {url}: {exc}") from exc
+        except httpx.HTTPError as exc:
+            raise CopilotError(f"Request failed for {url}: {exc}") from exc
+
+        text = "".join(text_parts).strip()
+        if final_response is None:
+            if text:
+                return text
+            raise CopilotError(
+                "Responses stream ended without a terminal response event."
+            )
+
+        status = final_response.get("status")
+        if status == "failed":
+            error = final_response.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+                code = error.get("code")
+                if isinstance(message, str) and message.strip():
+                    prefix = f"{code}: " if isinstance(code, str) and code else ""
                     raise CopilotError(
-                        f"Expected an SSE stream from {url}, got {content_type or 'unknown content type'}: {detail}"
-                    ) from exc
-                return extract_response_text(payload)
+                        f"Responses API request failed: {prefix}{message.strip()}"
+                    )
+            raise CopilotError("Responses API request failed.")
 
-            for event in iter_sse_events(response, url):
-                if not isinstance(event, dict):
-                    continue
+        if status == "incomplete":
+            details = final_response.get("incomplete_details")
+            reason = "unknown"
+            if isinstance(details, dict):
+                raw_reason = details.get("reason")
+                if isinstance(raw_reason, str) and raw_reason.strip():
+                    reason = raw_reason.strip()
+            if text:
+                return f"{text}\n\n[Response incomplete: {reason}]"
+            raise CopilotError(f"Responses API response was incomplete: {reason}.")
 
-                event_type = event.get("type")
-                if event_type == "response.output_text.delta":
-                    delta = event.get("delta")
-                    if isinstance(delta, str) and delta:
-                        text_parts.append(delta)
-                    continue
-
-                if event_type == "response.output_text.done" and not text_parts:
-                    text = event.get("text")
-                    if isinstance(text, str) and text.strip():
-                        text_parts.append(text)
-                    continue
-
-                if event_type == "error":
-                    error = event.get("error")
-                    if isinstance(error, dict):
-                        message = error.get("message")
-                        code = error.get("code")
-                        if isinstance(message, str) and message.strip():
-                            prefix = (
-                                f"{code}: " if isinstance(code, str) and code else ""
-                            )
-                            raise CopilotError(
-                                f"Responses stream error: {prefix}{message.strip()}"
-                            )
-                    raise CopilotError("Responses stream returned an error event.")
-
-                if event_type in {
-                    "response.completed",
-                    "response.failed",
-                    "response.incomplete",
-                }:
-                    response_payload = event.get("response")
-                    if isinstance(response_payload, dict):
-                        final_response = response_payload
-    except httpx.HTTPError as exc:
-        raise CopilotError(f"Request failed for {url}: {exc}") from exc
-
-    text = "".join(text_parts).strip()
-    if final_response is None:
         if text:
             return text
-        raise CopilotError("Responses stream ended without a terminal response event.")
 
-    status = final_response.get("status")
-    if status == "failed":
-        error = final_response.get("error")
-        if isinstance(error, dict):
-            message = error.get("message")
-            code = error.get("code")
-            if isinstance(message, str) and message.strip():
-                prefix = f"{code}: " if isinstance(code, str) and code else ""
-                raise CopilotError(
-                    f"Responses API request failed: {prefix}{message.strip()}"
-                )
-        raise CopilotError("Responses API request failed.")
+        return extract_response_text(final_response)
 
-    if status == "incomplete":
-        details = final_response.get("incomplete_details")
-        reason = "unknown"
-        if isinstance(details, dict):
-            raw_reason = details.get("reason")
-            if isinstance(raw_reason, str) and raw_reason.strip():
-                reason = raw_reason.strip()
-        if text:
-            return f"{text}\n\n[Response incomplete: {reason}]"
-        raise CopilotError(f"Responses API response was incomplete: {reason}.")
-
-    if text:
-        return text
-
-    return extract_response_text(final_response)
+    raise AssertionError("Responses completion exhausted retries unexpectedly.")
 
 
 def complete_text_prompt(
