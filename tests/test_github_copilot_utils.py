@@ -1,6 +1,6 @@
 from __future__ import annotations
-
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest  # noqa: F401
 from rich.console import Console
@@ -66,10 +66,26 @@ def test_normalize_domain_and_url_helpers() -> None:
     )
 
 
+def test_credentials_path_uses_platformdirs_state_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(
+        github_copilot,
+        "Settings",
+        lambda: SimpleNamespace(
+            state_dir=state_dir,
+            config_file=tmp_path / "config.json",
+        ),
+    )
+
+    assert github_copilot.credentials_path() == state_dir / "copilot-auth.json"
+
+
 def test_save_and_load_credentials_round_trip(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    path = tmp_path / "copilot-auth.json"
+    path = tmp_path / "state" / "copilot-auth.json"
     monkeypatch.setattr(github_copilot, "credentials_path", lambda: path)
     credentials = github_copilot.CopilotCredentials(
         github_access_token="ghu_123",

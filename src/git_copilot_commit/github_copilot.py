@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import secrets
 import time
@@ -24,6 +23,7 @@ from .settings import Settings
 APP_NAME = "github-copilot-commit"
 CLI_AUTH_COMMAND = "git-copilot-commit authenticate"
 DEFAULT_GITHUB_DOMAIN = "github.com"
+CREDENTIALS_FILENAME = "copilot-auth.json"
 USER_AGENT = "GitHubCopilotChat/0.35.0"
 EDITOR_VERSION = "vscode/1.107.0"
 EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0"
@@ -266,16 +266,8 @@ class CopilotConfig:
 
         return cls(default_model=default_model)
 
-
-def xdg_data_home() -> Path:
-    value = os.environ.get("XDG_DATA_HOME")
-    if value:
-        return Path(value).expanduser()
-    return Path.home() / ".local" / "share"
-
-
 def credentials_path() -> Path:
-    return xdg_data_home() / APP_NAME / "copilot-auth.json"
+    return Settings().state_dir / CREDENTIALS_FILENAME
 
 
 def config_path() -> Path:
@@ -1375,7 +1367,9 @@ def login(
 
     if existing and not force:
         raise CopilotError(
-            f"Cached credentials already exist at {credentials_path()}. Re-run with --force to replace them."
+            "Cached credentials already exist at "
+            f"{credentials_path()}. "
+            "Re-run with --force to replace them."
         )
 
     domain = normalized_domain or DEFAULT_GITHUB_DOMAIN
