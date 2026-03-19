@@ -19,7 +19,6 @@ from .git import GitRepository, GitError, GitStatus, NotAGitRepositoryError
 from .split_commits import (
     PatchUnit,
     SplitCommitPlan,
-    SplitCommitLimitExceededError,
     SplitPlanningError,
     build_split_plan_prompt,
     build_status_for_patch_units,
@@ -37,7 +36,6 @@ app = typer.Typer(help=__doc__, add_completion=False)
 
 COMMIT_MESSAGE_PROMPT_FILENAME = "commit-message-generator-prompt.md"
 SPLIT_COMMIT_PLANNER_PROMPT_FILENAME = "split-commit-planner-prompt.md"
-DEFAULT_AUTO_MAX_COMMITS = 10
 SPLIT_DIFF_ARGS = [
     "--binary",
     "--full-index",
@@ -75,7 +73,7 @@ SplitOption = Annotated[
         "--split",
         help=(
             "Split staged hunks into multiple commits automatically. Pass "
-            "`--split=N` to request splitting up to N commits."
+            "`--split=N` to express a preference for N commits."
         ),
     ),
 ]
@@ -348,21 +346,6 @@ def generate_commit_message_for_status(
     )
 
 
-def generate_commit_message(
-    repo: GitRepository,
-    model: str | None = None,
-    context: str = "",
-    http_client_config: github_copilot.HttpClientConfig | None = None,
-) -> str:
-    """Generate a conventional commit message using the repository's staged diff."""
-    return generate_commit_message_for_status(
-        repo.get_status(),
-        model=model,
-        context=context,
-        http_client_config=http_client_config,
-    )
-
-
 def commit_with_retry_no_verify(
     repo: GitRepository,
     message: str,
@@ -467,7 +450,6 @@ def request_split_commit_plan(
     status: GitStatus,
     patch_units: tuple[PatchUnit, ...],
     *,
-    max_commits: int,
     preferred_commits: int | None = None,
     model: str | None = None,
     context: str = "",
@@ -478,7 +460,6 @@ def request_split_commit_plan(
         planner_prompt = build_split_plan_prompt(
             status,
             patch_units,
-            max_commits=max_commits,
             preferred_commits=preferred_commits,
             context=context,
         )
@@ -495,7 +476,6 @@ def request_split_commit_plan(
         return parse_split_plan_response(
             response,
             patch_units,
-            max_commits=max_commits,
         )
     except github_copilot.CopilotError as exc:
         print_copilot_error("Could not generate a split commit plan", exc)
@@ -537,25 +517,31 @@ def request_split_commit_messages(
         raise typer.Exit(1)
 
 
-def resolve_split_commit_limit(
-    exc: SplitCommitLimitExceededError, *, yes: bool = False
+def confirm_split_commit_count(
+    plan: SplitCommitPlan,
+    *,
+    preferred_commits: int,
+    yes: bool = False,
 ) -> SplitCommitPlan:
-    """Ask whether to proceed when the planner exceeds the configured limit."""
+    """Ask whether to proceed when the planner exceeds the preferred count."""
+    actual_commits = len(plan.commits)
+    if actual_commits <= preferred_commits:
+        return plan
+
     console.print(
-        f"[yellow]Split planning produced {exc.actual_commits} commits, exceeding the automatic review limit of {exc.max_commits}.[/yellow]"
+        "[yellow]Split planning produced "
+        f"{actual_commits} commits, exceeding the preferred count of "
+        f"{preferred_commits}.[/yellow]"
     )
 
     if yes:
-        console.print(
-            "[red]Cannot ask whether to proceed because --yes was used. Re-run without --yes to review the larger plan.[/red]"
-        )
-        raise typer.Exit(1)
+        return plan
 
     if Confirm.ask(
-        f"Proceed with [bold]{exc.actual_commits} commits[/] anyway?",
+        f"Proceed with [bold]{actual_commits} commits[/] anyway?",
         default=False,
     ):
-        return exc.plan
+        return plan
 
     console.print("Split commit plan cancelled.")
     raise typer.Exit()
@@ -747,7 +733,7 @@ def handle_split_commit_flow(
         if not should_split:
             console.print(
                 "[yellow]Auto split not triggered: "
-                f"{reason}. Creating a single commit. Use [bold]--split N[/] to suggest an upper bound.[/yellow]"
+                f"{reason}. Creating a single commit. Use [bold]--split N[/] to express a preferred commit count.[/yellow]"
             )
             handle_single_commit_flow(
                 repo,
@@ -762,25 +748,19 @@ def handle_split_commit_flow(
         console.print(f"[yellow]Auto split triggered: {reason}.[/yellow]")
     else:
         console.print(
-            f"[yellow]Planning up to {preferred_commits} commits from the staged patch units.[/yellow]"
+            "[yellow]Planning split commits with a preference for "
+            f"{preferred_commits} commits.[/yellow]"
         )
 
     try:
         split_plan = request_split_commit_plan(
             status,
             patch_units,
-            max_commits=(
-                DEFAULT_AUTO_MAX_COMMITS
-                if preferred_commits is None
-                else preferred_commits
-            ),
             preferred_commits=preferred_commits,
             model=model,
             context=context,
             http_client_config=http_client_config,
         )
-    except SplitCommitLimitExceededError as exc:
-        split_plan = resolve_split_commit_limit(exc, yes=yes)
     except SplitPlanningError as exc:
         console.print(
             "[yellow]Split planning returned an invalid plan; falling back to a single commit.[/yellow]"
@@ -795,6 +775,13 @@ def handle_split_commit_flow(
             http_client_config=http_client_config,
         )
         return
+
+    if preferred_commits is not None:
+        split_plan = confirm_split_commit_count(
+            split_plan,
+            preferred_commits=preferred_commits,
+            yes=yes,
+        )
 
     prepared_commits = request_split_commit_messages(
         split_plan,

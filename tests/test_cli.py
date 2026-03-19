@@ -8,10 +8,10 @@ from typer.testing import CliRunner
 import git_copilot_commit.cli as cli
 from git_copilot_commit import github_copilot
 from git_copilot_commit.cli import (
-    DEFAULT_AUTO_MAX_COMMITS,
     PreparedSplitCommit,
     build_http_client_config,
     build_commit_message_prompt,
+    confirm_split_commit_count,
     commit_with_retry_no_verify,
     display_selected_model,
     display_split_commit_plan,
@@ -24,7 +24,6 @@ from git_copilot_commit.cli import (
     print_copilot_error,
     preprocess_cli_args,
     resolve_prompt_file,
-    resolve_split_commit_limit,
     run,
     SPLIT_DIFF_ARGS,
     stage_changes_for_commit,
@@ -32,7 +31,6 @@ from git_copilot_commit.cli import (
 from git_copilot_commit.git import GitFile, GitStatus
 from git_copilot_commit.split_commits import (
     PatchUnit,
-    SplitCommitLimitExceededError,
     SplitCommitPlan,
     SplitPlanCommit,
     extract_patch_units,
@@ -147,7 +145,7 @@ def test_display_split_commit_plan_shows_files_not_hunk_summaries(
     assert rendered.count("src/app.py") == 1
 
 
-def test_resolve_split_commit_limit_can_proceed_with_larger_plan(
+def test_confirm_split_commit_count_can_proceed_with_larger_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
@@ -158,14 +156,17 @@ def test_resolve_split_commit_limit_can_proceed_with_larger_plan(
             SplitPlanCommit(("u3",)),
         )
     )
-    exc = SplitCommitLimitExceededError(plan, 2)
 
-    resolved_plan = resolve_split_commit_limit(exc, yes=False)
+    resolved_plan = confirm_split_commit_count(
+        plan,
+        preferred_commits=2,
+        yes=False,
+    )
 
     assert resolved_plan == plan
 
 
-def test_resolve_split_commit_limit_rejects_noninteractive_yes_mode() -> None:
+def test_confirm_split_commit_count_assumes_yes_means_proceed() -> None:
     plan = SplitCommitPlan(
         commits=(
             SplitPlanCommit(("u1",)),
@@ -173,10 +174,14 @@ def test_resolve_split_commit_limit_rejects_noninteractive_yes_mode() -> None:
             SplitPlanCommit(("u3",)),
         )
     )
-    exc = SplitCommitLimitExceededError(plan, 2)
 
-    with pytest.raises(typer.Exit):
-        resolve_split_commit_limit(exc, yes=True)
+    resolved_plan = confirm_split_commit_count(
+        plan,
+        preferred_commits=2,
+        yes=True,
+    )
+
+    assert resolved_plan == plan
 
 
 def test_print_copilot_error_uses_rich_model_selection_format(
@@ -679,7 +684,12 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
             summary="summary 2",
         ),
     )
-    split_plan = Mock()
+    split_plan = SplitCommitPlan(
+        commits=(
+            SplitPlanCommit(("u1",)),
+            SplitPlanCommit(("u2",)),
+        )
+    )
     prepared_commits = [
         PreparedSplitCommit(message="feat: code", patch_units=(patch_units[0],)),
         PreparedSplitCommit(message="docs: readme", patch_units=(patch_units[1],)),
@@ -706,7 +716,6 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
     request_plan.assert_called_once_with(
         status,
         patch_units,
-        max_commits=DEFAULT_AUTO_MAX_COMMITS,
         preferred_commits=None,
         model="gpt-5.4",
         context="",
@@ -751,7 +760,12 @@ def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
             summary="summary 2",
         ),
     )
-    split_plan = Mock()
+    split_plan = SplitCommitPlan(
+        commits=(
+            SplitPlanCommit(("u1",)),
+            SplitPlanCommit(("u2",)),
+        )
+    )
     prepared_commits = [
         PreparedSplitCommit(message="feat: code", patch_units=(patch_units[0],)),
         PreparedSplitCommit(message="docs: readme", patch_units=(patch_units[1],)),
@@ -776,12 +790,81 @@ def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
     request_plan.assert_called_once_with(
         status,
         patch_units,
-        max_commits=2,
         preferred_commits=2,
         model="gpt-5.4",
         context="",
         http_client_config=None,
     )
+    execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
+
+
+def test_handle_split_commit_flow_prompts_when_plan_exceeds_preference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    repo = Mock()
+    repo.get_staged_diff.return_value = "diff"
+    patch_units = (
+        PatchUnit(
+            id="u1",
+            order=0,
+            path="src/app.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 1",
+            summary="summary 1",
+        ),
+        PatchUnit(
+            id="u2",
+            order=1,
+            path="src/lib.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 2",
+            summary="summary 2",
+        ),
+        PatchUnit(
+            id="u3",
+            order=2,
+            path="README.md",
+            staged_status="A",
+            kind="new_file",
+            patch="patch 3",
+            summary="summary 3",
+        ),
+    )
+    split_plan = SplitCommitPlan(
+        commits=(
+            SplitPlanCommit(("u1",)),
+            SplitPlanCommit(("u2",)),
+            SplitPlanCommit(("u3",)),
+        )
+    )
+    prepared_commits = [
+        PreparedSplitCommit(message="feat: app", patch_units=(patch_units[0],)),
+        PreparedSplitCommit(message="refactor: lib", patch_units=(patch_units[1],)),
+        PreparedSplitCommit(message="docs: readme", patch_units=(patch_units[2],)),
+    ]
+    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "request_split_commit_plan", Mock(return_value=split_plan))
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+    request_messages = Mock(return_value=prepared_commits)
+    execute_plan = Mock(return_value=["aaaabbbb", "ccccdddd", "eeeeffff"])
+    monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
+    monkeypatch.setattr(cli, "execute_split_commit_plan", execute_plan)
+    monkeypatch.setattr(cli, "display_split_commit_plan", Mock())
+    monkeypatch.setattr(cli, "handle_single_commit_flow", Mock())
+
+    handle_split_commit_flow(
+        repo,
+        status,
+        preferred_commits=2,
+        model="gpt-5.4",
+    )
+
+    cli.Confirm.ask.assert_called_once()
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
 
 
@@ -814,7 +897,11 @@ def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
         ),
     )
     monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
-    request_plan = Mock(return_value=Mock())
+    request_plan = Mock(
+        return_value=SplitCommitPlan(
+            commits=(SplitPlanCommit(("u1", "u2")),)
+        )
+    )
     request_messages = Mock(
         return_value=[
             PreparedSplitCommit(
@@ -838,7 +925,6 @@ def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
     request_plan.assert_called_once_with(
         status,
         patch_units,
-        max_commits=3,
         preferred_commits=3,
         model="gpt-5.4",
         context="",

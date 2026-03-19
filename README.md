@@ -91,7 +91,7 @@ $ uvx git-copilot-commit commit --help
 ╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ --all         -a                               Stage all files before committing                         │
 │ --split                                        Split staged hunks into multiple commits automatically.   │
-│                                                Pass `--split=N` to request splitting up to N commits.    │
+│                                                Pass `--split=N` to express a preference for N commits.   │
 │ --model       -m                     MODEL_ID  Model to use for generating commit message                │
 │ --yes         -y                               Automatically accept the generated commit message         │
 │ --context     -c                     TEXT      Optional user-provided context to guide commit message    │
@@ -131,7 +131,7 @@ Split staged hunks into separate commits:
 uvx git-copilot-commit commit --split
 ```
 
-Prefer up to two commits:
+Prefer two commits:
 
 ```bash
 uvx git-copilot-commit commit --split 2

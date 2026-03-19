@@ -16,18 +16,6 @@ class SplitPlanningError(ValueError):
     """Raised when a split-commit plan cannot be built or validated."""
 
 
-class SplitCommitLimitExceededError(SplitPlanningError):
-    """Raised when the planner returns a valid plan above the configured limit."""
-
-    def __init__(self, plan: "SplitCommitPlan", max_commits: int) -> None:
-        self.plan = plan
-        self.max_commits = max_commits
-        self.actual_commits = len(plan.commits)
-        super().__init__(
-            f"Planner returned {self.actual_commits} commits, exceeding the max of {max_commits}."
-        )
-
-
 @dataclass(frozen=True, slots=True)
 class FilePatch:
     """Structured representation of a single file-level diff patch."""
@@ -86,8 +74,7 @@ def evaluate_auto_split(patch_units: Sequence[PatchUnit]) -> tuple[bool, str]:
 
     if len(staged_statuses) >= 2:
         return True, (
-            "found mixed staged change types "
-            f"({', '.join(sorted(staged_statuses))})"
+            f"found mixed staged change types ({', '.join(sorted(staged_statuses))})"
         )
 
     if len(paths) >= AUTO_SPLIT_PATH_THRESHOLD:
@@ -212,13 +199,14 @@ def build_split_plan_prompt(
     status: GitStatus,
     patch_units: Sequence[PatchUnit],
     *,
-    max_commits: int,
     preferred_commits: int | None = None,
     context: str = "",
 ) -> str:
     """Build the user prompt used to request a split-commit plan."""
     if not patch_units:
-        raise SplitPlanningError("Cannot plan split commits without staged patch units.")
+        raise SplitPlanningError(
+            "Cannot plan split commits without staged patch units."
+        )
 
     prompt_parts = []
     if context.strip():
@@ -226,7 +214,6 @@ def build_split_plan_prompt(
 
     if preferred_commits is not None:
         prompt_parts.append(f"Preferred commits: {preferred_commits}")
-    prompt_parts.append(f"Maximum commits: {max_commits}")
 
     prompt_parts.extend(
         [
@@ -256,8 +243,6 @@ def build_split_plan_prompt(
 def parse_split_plan_response(
     response_text: str,
     patch_units: Sequence[PatchUnit],
-    *,
-    max_commits: int,
 ) -> SplitCommitPlan:
     """Parse and validate the planner model's JSON response."""
     payload = parse_json_payload(response_text)
@@ -269,7 +254,9 @@ def parse_split_plan_response(
         commits_data = payload
 
     if not isinstance(commits_data, list) or not commits_data:
-        raise SplitPlanningError("Planner response did not include a non-empty commits list.")
+        raise SplitPlanningError(
+            "Planner response did not include a non-empty commits list."
+        )
 
     units_by_id = {unit.id: unit for unit in patch_units}
     expected_ids = set(units_by_id)
@@ -305,7 +292,9 @@ def parse_split_plan_response(
             seen_in_commit.add(unit_id)
             unit_ids.append(unit_id)
 
-        ordered_unit_ids = tuple(sorted(unit_ids, key=lambda unit_id: units_by_id[unit_id].order))
+        ordered_unit_ids = tuple(
+            sorted(unit_ids, key=lambda unit_id: units_by_id[unit_id].order)
+        )
         validated_commits.append(SplitPlanCommit(unit_ids=ordered_unit_ids))
         assigned_ids.extend(unit_ids)
 
@@ -326,8 +315,6 @@ def parse_split_plan_response(
         )
 
     plan = SplitCommitPlan(commits=tuple(validated_commits))
-    if len(plan.commits) > max_commits:
-        raise SplitCommitLimitExceededError(plan, max_commits)
 
     return plan
 
@@ -354,7 +341,9 @@ def build_status_for_patch_units(patch_units: Sequence[PatchUnit]) -> GitStatus:
         if file_key in seen_paths:
             continue
         seen_paths.add(file_key)
-        files.append(GitFile(path=unit.path, status=" ", staged_status=unit.staged_status))
+        files.append(
+            GitFile(path=unit.path, status=" ", staged_status=unit.staged_status)
+        )
 
     return GitStatus(
         files=files,
@@ -397,7 +386,9 @@ def parse_diff_paths(diff_header_line: str) -> tuple[str, str]:
     try:
         parts = shlex.split(diff_header_line)
     except ValueError as exc:
-        raise SplitPlanningError(f"Could not parse diff header: {diff_header_line}") from exc
+        raise SplitPlanningError(
+            f"Could not parse diff header: {diff_header_line}"
+        ) from exc
 
     if len(parts) < 4:
         raise SplitPlanningError(f"Unexpected diff header: {diff_header_line}")
@@ -419,10 +410,16 @@ def classify_file_patch(
     hunks: Sequence[str],
 ) -> tuple[str, str]:
     """Infer the staged status and planning kind for a file patch."""
-    if any(line.startswith("GIT binary patch") or line.startswith("Binary files ") for line in lines):
+    if any(
+        line.startswith("GIT binary patch") or line.startswith("Binary files ")
+        for line in lines
+    ):
         return "M", "binary"
 
-    if any(line.startswith("rename from ") or line.startswith("rename to ") for line in lines):
+    if any(
+        line.startswith("rename from ") or line.startswith("rename to ")
+        for line in lines
+    ):
         return "R", "rename"
 
     if any(line.startswith("new file mode ") for line in lines):
@@ -431,7 +428,9 @@ def classify_file_patch(
     if any(line.startswith("deleted file mode ") for line in lines):
         return "D", "deleted_file"
 
-    if any(line.startswith("old mode ") or line.startswith("new mode ") for line in lines):
+    if any(
+        line.startswith("old mode ") or line.startswith("new mode ") for line in lines
+    ):
         return "M", "mode_change"
 
     if old_path == "/dev/null":

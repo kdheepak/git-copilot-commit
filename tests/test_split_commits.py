@@ -3,7 +3,6 @@ from git_copilot_commit.git import GitFile, GitStatus
 from git_copilot_commit.split_commits import (
     FilePatch,
     PatchUnit,
-    SplitCommitLimitExceededError,
     SplitPlanningError,
     build_split_plan_prompt,
     build_status_for_patch_units,
@@ -92,11 +91,9 @@ def test_build_split_plan_prompt_includes_unit_details() -> None:
     prompt = build_split_plan_prompt(
         make_status(),
         units,
-        max_commits=3,
         context="Keep docs separate from code",
     )
 
-    assert "Maximum commits: 3" in prompt
     assert "Keep docs separate from code" in prompt
     assert "### u1" in prompt
     assert "Kind: hunk" in prompt
@@ -110,12 +107,10 @@ def test_build_split_plan_prompt_supports_preferred_commit_count() -> None:
     prompt = build_split_plan_prompt(
         make_status(),
         units,
-        max_commits=2,
         preferred_commits=2,
     )
 
     assert "Preferred commits: 2" in prompt
-    assert "Maximum commits: 2" in prompt
 
 
 def test_parse_split_plan_response_validates_complete_assignment() -> None:
@@ -131,7 +126,6 @@ def test_parse_split_plan_response_validates_complete_assignment() -> None:
         }
         """,
         units,
-        max_commits=3,
     )
 
     assert [commit.unit_ids for commit in plan.commits] == [("u1", "u2"), ("u3",)]
@@ -144,30 +138,23 @@ def test_parse_split_plan_response_rejects_duplicate_or_missing_units() -> None:
         parse_split_plan_response(
             '{"commits":[{"unit_ids":["u1","u1"]},{"unit_ids":["u3"]}]}',
             units,
-            max_commits=3,
         )
 
     with pytest.raises(SplitPlanningError):
         parse_split_plan_response(
             '{"commits":[{"unit_ids":["u1"]},{"unit_ids":["u3"]}]}',
             units,
-            max_commits=3,
         )
 
-
-def test_parse_split_plan_response_raises_limit_error_with_validated_plan() -> None:
+def test_parse_split_plan_response_allows_more_than_preferred_commits() -> None:
     units = extract_patch_units(MULTI_FILE_DIFF)
 
-    with pytest.raises(SplitCommitLimitExceededError) as context:
-        parse_split_plan_response(
-            '{"commits":[{"unit_ids":["u1"]},{"unit_ids":["u2"]},{"unit_ids":["u3"]}]}',
-            units,
-            max_commits=2,
-        )
+    plan = parse_split_plan_response(
+        '{"commits":[{"unit_ids":["u1"]},{"unit_ids":["u2"]},{"unit_ids":["u3"]}]}',
+        units,
+    )
 
-    assert context.value.actual_commits == 3
-    assert context.value.max_commits == 2
-    assert [commit.unit_ids for commit in context.value.plan.commits] == [
+    assert [commit.unit_ids for commit in plan.commits] == [
         ("u1",),
         ("u2",),
         ("u3",),
@@ -180,7 +167,6 @@ def test_parse_split_plan_response_allows_fewer_than_preferred_commits() -> None
     plan = parse_split_plan_response(
         '{"commits":[{"unit_ids":["u1","u2"]},{"unit_ids":["u3"]}]}',
         units,
-        max_commits=3,
     )
 
     assert [commit.unit_ids for commit in plan.commits] == [("u1", "u2"), ("u3",)]
@@ -317,7 +303,7 @@ def test_count_patch_changes_find_duplicates_and_group_patch_units() -> None:
 
 def test_build_split_plan_prompt_requires_patch_units() -> None:
     with pytest.raises(SplitPlanningError):
-        build_split_plan_prompt(make_status(), [], max_commits=2)
+        build_split_plan_prompt(make_status(), [])
 
 
 def test_evaluate_auto_split_is_conservative_for_small_similar_changes() -> None:
