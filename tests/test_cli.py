@@ -148,7 +148,8 @@ def test_display_split_commit_plan_shows_files_not_hunk_summaries(
 def test_confirm_split_commit_count_can_proceed_with_larger_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+    confirm_ask = Mock(return_value=True)
+    monkeypatch.setattr(cli.Confirm, "ask", confirm_ask)
     plan = SplitCommitPlan(
         commits=(
             SplitPlanCommit(("u1",)),
@@ -868,7 +869,8 @@ def test_handle_split_commit_flow_prompts_when_plan_exceeds_preference(
     ]
     monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
     monkeypatch.setattr(cli, "request_split_commit_plan", Mock(return_value=split_plan))
-    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+    confirm_ask = Mock(return_value=True)
+    monkeypatch.setattr(cli.Confirm, "ask", confirm_ask)
     request_messages = Mock(return_value=prepared_commits)
     execute_plan = Mock(return_value=["aaaabbbb", "ccccdddd", "eeeeffff"])
     monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
@@ -883,7 +885,7 @@ def test_handle_split_commit_flow_prompts_when_plan_exceeds_preference(
         model="gpt-5.4",
     )
 
-    cli.Confirm.ask.assert_called_once()
+    confirm_ask.assert_called_once()
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
 
 
