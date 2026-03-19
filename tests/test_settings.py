@@ -65,6 +65,27 @@ def test_settings_load_invalid_json_as_empty_config(settings_dirs) -> None:
     assert settings.get("anything") is None
 
 
+def test_settings_warns_when_save_fails(
+    settings_dirs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = settings_module.Settings()
+    settings.set("theme", "light")
+
+    def fail_open(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(settings_module, "open", fail_open, raising=False)
+
+    with pytest.warns(
+        RuntimeWarning,
+        match=r"Could not save config to .*config\.json: disk full",
+    ):
+        settings.set("theme", "dark")
+
+    saved = json.loads(settings.config_file.read_text(encoding="utf-8"))
+    assert saved["theme"] == "light"
+
+
 def test_default_prompt_file_prefers_nested_defaults(settings_dirs) -> None:
     config_file = settings_dirs["config"] / "config.json"
     config_file.parent.mkdir(parents=True, exist_ok=True)

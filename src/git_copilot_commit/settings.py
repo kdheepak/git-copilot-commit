@@ -3,6 +3,7 @@ Settings management using platformdirs for cross-platform directory paths.
 """
 
 import json
+import warnings
 from typing import Any
 
 from platformdirs import (
@@ -50,10 +51,15 @@ class Settings:
     def _save_config(self) -> None:
         """Save configuration to file."""
         try:
-            with open(self.config_file, "w") as f:
+            with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(self._config, f, indent=2)
-        except IOError:
-            pass  # Silently fail if we can't write
+                f.write("\n")
+        except OSError as exc:
+            warnings.warn(
+                f"Could not save config to {self.config_file}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value."""
