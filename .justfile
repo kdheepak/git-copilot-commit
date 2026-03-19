@@ -38,7 +38,7 @@ bump type="patch":
     new_version=$(just next-version {{type}})
     echo "New version: $new_version"
 
-    git commit --allow-empty -m "Bump version to $new_version"
+    git commit --allow-empty -m "chore(build): Bump version to $new_version"
     git tag "$new_version"
 
     echo "✓ Created commit and tag for $new_version"
