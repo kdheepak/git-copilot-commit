@@ -1,5 +1,9 @@
 # `git-copilot-commit`
 
+[![CI](https://img.shields.io/github/actions/workflow/status/kdheepak/git-copilot-commit/ci.yml?branch=main&label=CI)](https://github.com/kdheepak/git-copilot-commit/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/git-copilot-commit)](https://pypi.org/project/git-copilot-commit/)
+[![License](https://img.shields.io/github/license/kdheepak/git-copilot-commit)](https://github.com/kdheepak/git-copilot-commit/blob/main/LICENSE)
+
 AI-powered Git commit assistant that generates conventional commit messages using GitHub Copilot.
 
 ![Screenshot of git-copilot-commit in action](https://github.com/user-attachments/assets/6a6d70a6-6060-44e6-8cf4-a6532e9e9142)
@@ -7,13 +11,13 @@ AI-powered Git commit assistant that generates conventional commit messages usin
 ## Features
 
 - Generates commit messages based on your staged changes
-- Supports multiple AI models: GPT-4, Claude, Gemini, and more
+- Supports multiple LLM models: GPT-4, Claude, Gemini, and more
 - Allows editing of generated messages before committing
 - Follows the [Conventional Commits](https://www.conventionalcommits.org/) standard
 
 ## Installation
 
-### Install the tool using [`uv`] (recommended)
+### Install the tool using [`uv`]
 
 Install [`uv`]:
 
@@ -25,14 +29,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-You can install and run the latest version of tool directly every time by invoking this one command:
+You can run the latest version of tool directly every time by invoking this one command:
 
 ```bash
-# Install latest version into temporary environment and run --help
+# Every invocation installs latest version into temporary environment and runs --help
 uvx git-copilot-commit --help
 ```
 
-Alternatively, you can install into a global isolated environment and run `git-copilot-commit`:
+Alternatively, you can install the tool once into a global isolated environment 
+and run `git-copilot-commit` to invoke it:
 
 ```bash
 # Install into global isolated environment
@@ -43,14 +48,6 @@ git-copilot-commit --help
 ```
 
 [`uv`]: https://github.com/astral-sh/uv
-
-### Install with `pipx`
-
-If you prefer to use `pipx`:
-
-```bash
-pipx install git-copilot-commit
-```
 
 ## Prerequisites
 
@@ -86,17 +83,26 @@ pipx install git-copilot-commit
 
 ```bash
 $ uvx git-copilot-commit commit --help
-Usage: git-copilot-commit commit [OPTIONS]
 
-  Automatically commit changes in the current git repository.
+ Usage: git-copilot-commit commit [OPTIONS]
 
-Options:
-  -a, --all         Stage all files before committing
-  --split           Split staged hunks into multiple commits. Use
-                    `--split=N` to prefer up to N commits.
-  -m, --model TEXT  Model to use for generating commit message
-  -y, --yes         Automatically accept the generated commit message
-  --help            Show this message and exit.
+ Generate commit message based on changes in the current git repository and commit them.
+
+╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --all         -a                               Stage all files before committing                         │
+│ --split                                        Split staged hunks into multiple commits automatically.   │
+│                                                Pass `--split=N` to request splitting up to N commits.    │
+│ --model       -m                     MODEL_ID  Model to use for generating commit message                │
+│ --yes         -y                               Automatically accept the generated commit message         │
+│ --context     -c                     TEXT      Optional user-provided context to guide commit message    │
+│ --ca-bundle                          PATH      Path to a custom CA bundle (PEM)                          │
+│ --insecure                                     Disable SSL certificate verification.                     │
+│ --native-tls      --no-native-tls              Use the OS's native certificate store via 'truststore'    │
+│                                                for httpx instead of the Python bundle. Ignored if        │
+│                                                --ca-bundle or --insecure is used.                        │
+│                                                [default: no-native-tls]                                  │
+│ --help                                         Show this message and exit.                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Examples
@@ -180,3 +186,6 @@ git ai-commit --all --yes --model claude-3.5-sonnet
 > ```bash
 > git config --global diff.context 3
 > ```
+>
+> This may be useful because this tool sends the diffs with surrounding context 
+> to the LLM for generating a commit message

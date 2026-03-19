@@ -75,7 +75,7 @@ SplitOption = Annotated[
         "--split",
         help=(
             "Split staged hunks into multiple commits automatically. Pass "
-            "`--split=N` to prefer up to N commits."
+            "`--split=N` to request splitting up to N commits."
         ),
     ),
 ]
@@ -128,11 +128,7 @@ def preprocess_cli_args(args: Sequence[str]) -> list[str]:
             index += 1
             continue
 
-        if (
-            in_commit_command
-            and arg == "--split"
-            and index + 1 < len(args)
-        ):
+        if in_commit_command and arg == "--split" and index + 1 < len(args):
             split_value = args[index + 1].strip().lower()
             if split_value == "auto":
                 processed_args.append("--split")
