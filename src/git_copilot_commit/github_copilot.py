@@ -162,6 +162,7 @@ class CopilotModel:
     name: str
     vendor: str | None = None
     family: str | None = None
+    max_context_window_tokens: int | None = None
     supported_endpoints: tuple[str, ...] = ()
 
     @classmethod
@@ -173,10 +174,20 @@ class CopilotModel:
         supported_endpoints = payload.get("supported_endpoints")
 
         family: str | None = None
+        max_context_window_tokens: int | None = None
         if isinstance(capabilities, dict):
             raw_family = capabilities.get("family")
             if isinstance(raw_family, str) and raw_family:
                 family = raw_family
+
+            limits = capabilities.get("limits")
+            if isinstance(limits, dict):
+                raw_context_window = limits.get("max_context_window_tokens")
+                if (
+                    isinstance(raw_context_window, int)
+                    and raw_context_window > 0
+                ):
+                    max_context_window_tokens = raw_context_window
 
         endpoints: list[str] = []
         if isinstance(supported_endpoints, list):
@@ -192,6 +203,7 @@ class CopilotModel:
             name=name if isinstance(name, str) and name else model_id,
             vendor=vendor if isinstance(vendor, str) and vendor else None,
             family=family,
+            max_context_window_tokens=max_context_window_tokens,
             supported_endpoints=tuple(endpoints),
         )
 
@@ -891,6 +903,12 @@ def format_supported_endpoints(model: CopilotModel) -> str:
     return "default"
 
 
+def format_context_window(model: CopilotModel) -> str:
+    if model.max_context_window_tokens is None:
+        return "?"
+    return f"{model.max_context_window_tokens:,}"
+
+
 def normalize_vendor_filter(value: str | None) -> str | None:
     if value is None:
         return None
@@ -1226,6 +1244,7 @@ def print_model_table(models: list[CopilotModel]) -> None:
     table.add_column("#", justify="right", style="cyan")
     table.add_column("Model", style="green")
     table.add_column("Vendor", style="blue")
+    table.add_column("Context", justify="right", style="bright_cyan")
     table.add_column("Route", style="yellow")
     table.add_column("Endpoints", style="magenta")
     for index, model in enumerate(models, start=1):
@@ -1233,6 +1252,7 @@ def print_model_table(models: list[CopilotModel]) -> None:
             str(index),
             model.id,
             model.vendor or "?",
+            format_context_window(model),
             infer_api_surface(model),
             format_supported_endpoints(model),
         )
