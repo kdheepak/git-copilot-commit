@@ -15,6 +15,7 @@ def make_model(
     *,
     vendor: str | None = None,
     family: str | None = None,
+    context_window_tokens: int | None = None,
     endpoints: tuple[str, ...] = (),
 ) -> github_copilot.CopilotModel:
     return github_copilot.CopilotModel(
@@ -22,6 +23,7 @@ def make_model(
         name=model_id,
         vendor=vendor,
         family=family,
+        max_context_window_tokens=context_window_tokens,
         supported_endpoints=endpoints,
     )
 
@@ -136,11 +138,15 @@ def test_credentials_and_payload_parsers(monkeypatch: pytest.MonkeyPatch) -> Non
             "id": "gpt-5.4",
             "name": "GPT-5.4",
             "vendor": "openai",
-            "capabilities": {"family": "gpt-5"},
+            "capabilities": {
+                "family": "gpt-5",
+                "limits": {"max_context_window_tokens": 272000},
+            },
             "supported_endpoints": ["/responses", "", 123],
         }
     )
     assert model.family == "gpt-5"
+    assert model.max_context_window_tokens == 272000
     assert model.supported_endpoints == ("/responses",)
 
     with pytest.raises(github_copilot.CopilotError):
@@ -233,6 +239,7 @@ def test_infer_api_surface_and_vendor_filtering() -> None:
     assert github_copilot.infer_api_surface(google_model) == "chat_completions"
     assert github_copilot.format_supported_endpoints(chat_model) == "/chat/completions"
     assert github_copilot.format_supported_endpoints(google_model) == "default"
+    assert github_copilot.format_context_window(gpt5_model) == "?"
 
     assert github_copilot.normalize_vendor_filter(" Gemini ") == "google"
     assert github_copilot.normalize_vendor_filter("claude") == "anthropic"
@@ -483,3 +490,26 @@ def test_render_model_selection_error_and_time_formatting(
     assert github_copilot.format_relative_duration(-59) == "59s ago"
     assert github_copilot.format_unix_timestamp(1_700_000_061).endswith("(in 1m 1s)")
     assert github_copilot.format_unix_timestamp(10**20) == str(10**20)
+
+
+def test_print_model_table_shows_context_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    table_console = Console(record=True, width=140)
+    monkeypatch.setattr(github_copilot, "console", table_console)
+
+    github_copilot.print_model_table(
+        [
+            make_model(
+                "gpt-5.4",
+                vendor="openai",
+                context_window_tokens=272000,
+                endpoints=("/responses",),
+            )
+        ]
+    )
+
+    rendered = table_console.export_text()
+
+    assert "Context" in rendered
+    assert "272,000" in rendered
