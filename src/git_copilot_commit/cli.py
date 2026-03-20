@@ -268,7 +268,12 @@ def display_selected_model(model: github_copilot.CopilotModel) -> None:
     console.print(f"[green]Using model:[/green] {model.id} ({', '.join(details)})")
 
 
-def build_commit_message_prompt(status: GitStatus, context: str = "") -> str:
+def build_commit_message_prompt(
+    status: GitStatus,
+    context: str = "",
+    *,
+    include_diff: bool = True,
+) -> str:
     """Build the prompt used to generate a commit message."""
     if not status.has_staged_changes:
         console.print("[red]No staged changes to commit.[/red]")
@@ -277,9 +282,15 @@ def build_commit_message_prompt(status: GitStatus, context: str = "") -> str:
     prompt_parts = [
         "`git status`:\n",
         f"```\n{status.get_porcelain_output()}\n```",
-        "\n\n`git diff --staged`:\n",
-        f"```\n{status.staged_diff}\n```",
     ]
+
+    if include_diff:
+        prompt_parts.extend(
+            [
+                "\n\n`git diff --staged`:\n",
+                f"```\n{status.staged_diff}\n```",
+            ]
+        )
 
     if context.strip():
         prompt_parts.insert(0, f"User-provided context:\n\n{context.strip()}\n\n")
@@ -330,6 +341,29 @@ def generate_commit_message_for_prompt(
     )
 
 
+def should_fallback_to_status_only(exc: github_copilot.CopilotError) -> bool:
+    message_parts = [str(exc)]
+    if isinstance(exc, github_copilot.CopilotHttpError) and exc.detail:
+        message_parts.append(exc.detail)
+
+    haystack = " ".join(part.strip() for part in message_parts if part).lower()
+    indicators = (
+        "maximum context length",
+        "context_length_exceeded",
+        "context window",
+        "prompt is too long",
+        "input is too long",
+        "request is too large",
+        "too many tokens",
+        "token limit",
+        "max_prompt_tokens",
+        "max prompt tokens",
+        "input tokens",
+        "prompt tokens",
+    )
+    return any(indicator in haystack for indicator in indicators)
+
+
 def generate_commit_message_for_status(
     status: GitStatus,
     model: str | None = None,
@@ -337,9 +371,27 @@ def generate_commit_message_for_status(
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> str:
     """Generate a commit message for a staged status snapshot."""
-    prompt = build_commit_message_prompt(status, context=context)
+    full_prompt = build_commit_message_prompt(status, context=context)
+    try:
+        return generate_commit_message_for_prompt(
+            full_prompt,
+            model=model,
+            http_client_config=http_client_config,
+        )
+    except github_copilot.CopilotError as exc:
+        if not should_fallback_to_status_only(exc):
+            raise
+
+    console.print(
+        "[yellow]Staged diff exceeded the model context window; retrying with [bold]`git status`[/] only.[/yellow]"
+    )
+    fallback_prompt = build_commit_message_prompt(
+        status,
+        context=context,
+        include_diff=False,
+    )
     return generate_commit_message_for_prompt(
-        prompt,
+        fallback_prompt,
         model=model,
         http_client_config=http_client_config,
     )

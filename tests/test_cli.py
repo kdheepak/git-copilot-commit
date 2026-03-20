@@ -62,6 +62,19 @@ def test_build_commit_message_prompt_includes_context_status_and_diff() -> None:
     assert "+print('hi')" in prompt
 
 
+def test_build_commit_message_prompt_can_omit_diff() -> None:
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+
+    prompt = build_commit_message_prompt(status, include_diff=False)
+
+    assert "`git status`" in prompt
+    assert "M  src/example.py" in prompt
+    assert "`git diff --staged`" not in prompt
+    assert "+print('hi')" not in prompt
+
+
 def test_build_commit_message_prompt_requires_staged_changes() -> None:
     status = make_status(staged_diff="   \n")
 
@@ -92,6 +105,41 @@ def test_generate_commit_message_for_status_normalizes_model_prefix(
     assert "system prompt" in rendered_prompt
     assert "Prefer feat scope" in rendered_prompt
     assert "diff --git a/src/example.py b/src/example.py" in rendered_prompt
+
+
+def test_generate_commit_message_for_status_retries_without_diff_on_context_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    mock_print = Mock()
+    mock_ask = Mock(
+        side_effect=[
+            github_copilot.CopilotHttpError(
+                400,
+                "Bad Request",
+                "This model's maximum context length was exceeded.",
+            ),
+            "feat: add example",
+        ]
+    )
+    monkeypatch.setattr(cli.console, "print", mock_print)
+    monkeypatch.setattr(cli, "load_system_prompt", Mock(return_value="system prompt"))
+    monkeypatch.setattr(cli.github_copilot, "ask", mock_ask)
+
+    message = generate_commit_message_for_status(status)
+
+    assert message == "feat: add example"
+    assert mock_ask.call_count == 2
+    first_prompt = mock_ask.call_args_list[0].args[0]
+    second_prompt = mock_ask.call_args_list[1].args[0]
+    assert "`git diff --staged`" in first_prompt
+    assert "diff --git a/src/example.py b/src/example.py" in first_prompt
+    assert "`git diff --staged`" not in second_prompt
+    assert "diff --git a/src/example.py b/src/example.py" not in second_prompt
+    assert "M  src/example.py" in second_prompt
+    mock_print.assert_called()
 
 
 def test_display_split_commit_plan_shows_files_not_hunk_summaries(
