@@ -341,7 +341,7 @@ def generate_commit_message_for_prompt(
     )
 
 
-def should_fallback_to_status_only(exc: github_copilot.CopilotError) -> bool:
+def should_retry_with_compact_prompt(exc: github_copilot.CopilotError) -> bool:
     message_parts = [str(exc)]
     if isinstance(exc, github_copilot.CopilotHttpError) and exc.detail:
         message_parts.append(exc.detail)
@@ -360,6 +360,7 @@ def should_fallback_to_status_only(exc: github_copilot.CopilotError) -> bool:
         "max prompt tokens",
         "input tokens",
         "prompt tokens",
+        "prompt token count",
     )
     return any(indicator in haystack for indicator in indicators)
 
@@ -379,7 +380,7 @@ def generate_commit_message_for_status(
             http_client_config=http_client_config,
         )
     except github_copilot.CopilotError as exc:
-        if not should_fallback_to_status_only(exc):
+        if not should_retry_with_compact_prompt(exc):
             raise
 
     console.print(
@@ -507,30 +508,64 @@ def request_split_commit_plan(
     http_client_config: github_copilot.HttpClientConfig | None = None,
 ) -> SplitCommitPlan:
     """Request and validate a split-commit plan for the staged patch units."""
-    try:
-        planner_prompt = build_split_plan_prompt(
-            status,
-            patch_units,
-            preferred_commits=preferred_commits,
-            context=context,
-        )
+    planner_system_prompt = load_named_prompt(SPLIT_COMMIT_PLANNER_PROMPT_FILENAME)
+    planner_prompt = build_split_plan_prompt(
+        status,
+        patch_units,
+        preferred_commits=preferred_commits,
+        context=context,
+    )
 
+    try:
         with console.status(
             "[yellow]Planning split commits from [bold]staged hunks[/] ...[/yellow]"
         ):
             response = ask_copilot_with_system_prompt(
-                load_named_prompt(SPLIT_COMMIT_PLANNER_PROMPT_FILENAME),
+                planner_system_prompt,
                 planner_prompt,
                 model=model,
                 http_client_config=http_client_config,
             )
+    except github_copilot.CopilotError as exc:
+        if not should_retry_with_compact_prompt(exc):
+            print_copilot_error("Could not generate a split commit plan", exc)
+            raise typer.Exit(1)
+
+        console.print(
+            "[yellow]Staged patch units exceeded the model context window; retrying split planning with summaries only.[/yellow]"
+        )
+    else:
         return parse_split_plan_response(
             response,
             patch_units,
         )
+
+    compact_planner_prompt = build_split_plan_prompt(
+        status,
+        patch_units,
+        preferred_commits=preferred_commits,
+        context=context,
+        include_patches=False,
+    )
+
+    try:
+        with console.status(
+            "[yellow]Planning split commits from [bold]patch summaries[/] ...[/yellow]"
+        ):
+            response = ask_copilot_with_system_prompt(
+                planner_system_prompt,
+                compact_planner_prompt,
+                model=model,
+                http_client_config=http_client_config,
+            )
     except github_copilot.CopilotError as exc:
         print_copilot_error("Could not generate a split commit plan", exc)
         raise typer.Exit(1)
+
+    return parse_split_plan_response(
+        response,
+        patch_units,
+    )
 
 
 def request_split_commit_messages(
