@@ -142,6 +142,70 @@ def test_generate_commit_message_for_status_retries_without_diff_on_context_over
     mock_print.assert_called()
 
 
+def test_request_split_commit_plan_retries_without_patches_on_context_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = GitStatus(
+        files=[
+            GitFile(path="src/example.py", status=" ", staged_status="M"),
+            GitFile(path="README.md", status=" ", staged_status="A"),
+        ],
+        staged_diff=(
+            "diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+            "diff --git a/README.md b/README.md\n+# hi\n"
+        ),
+        unstaged_diff="",
+    )
+    patch_units = (
+        PatchUnit(
+            id="u1",
+            order=0,
+            path="src/example.py",
+            staged_status="M",
+            kind="hunk",
+            patch="diff --git a/src/example.py b/src/example.py\n+print('hi')\n",
+            summary="src/example.py hunk 1/1 @@ -1 +1 @@ (+1/-0)",
+        ),
+        PatchUnit(
+            id="u2",
+            order=1,
+            path="README.md",
+            staged_status="A",
+            kind="new_file",
+            patch="diff --git a/README.md b/README.md\n+# hi\n",
+            summary="add README.md (+1/-0)",
+        ),
+    )
+    mock_print = Mock()
+    mock_ask = Mock(
+        side_effect=[
+            github_copilot.CopilotHttpError(
+                400,
+                "Bad Request",
+                (
+                    '{"error":{"message":"prompt token count of 1719062 exceeds '
+                    'the limit of 128000","code":"model_max_prompt_tokens_exceeded"}}'
+                ),
+            ),
+            '{"commits":[{"unit_ids":["u1"]},{"unit_ids":["u2"]}]}',
+        ]
+    )
+    monkeypatch.setattr(cli.console, "print", mock_print)
+    monkeypatch.setattr(cli, "load_named_prompt", Mock(return_value="system prompt"))
+    monkeypatch.setattr(cli, "ask_copilot_with_system_prompt", mock_ask)
+
+    plan = cli.request_split_commit_plan(status, patch_units)
+
+    assert [commit.unit_ids for commit in plan.commits] == [("u1",), ("u2",)]
+    assert mock_ask.call_count == 2
+    first_prompt = mock_ask.call_args_list[0].args[1]
+    second_prompt = mock_ask.call_args_list[1].args[1]
+    assert "```diff" in first_prompt
+    assert "```diff" not in second_prompt
+    assert "Patch units (summaries only):" in second_prompt
+    mock_print.assert_called()
+
+
 def test_display_split_commit_plan_shows_files_not_hunk_summaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
