@@ -173,6 +173,7 @@ def build_split_plan_prompt(
     *,
     preferred_commits: int | None = None,
     context: str = "",
+    include_patches: bool = True,
 ) -> str:
     """Build the user prompt used to request a split-commit plan."""
     if not patch_units:
@@ -193,7 +194,7 @@ def build_split_plan_prompt(
             "`git status`:",
             f"```\n{status.get_porcelain_output()}\n```",
             "",
-            "Patch units:",
+            "Patch units:" if include_patches else "Patch units (summaries only):",
         ]
     )
 
@@ -204,10 +205,15 @@ def build_split_plan_prompt(
                 f"Path: {unit.path}",
                 f"Kind: {unit.kind}",
                 f"Summary: {unit.summary}",
-                "Patch:",
-                f"```diff\n{unit.patch}\n```",
             ]
         )
+        if include_patches:
+            prompt_parts.extend(
+                [
+                    "Patch:",
+                    f"```diff\n{unit.patch}\n```",
+                ]
+            )
 
     return "\n".join(prompt_parts)
 
