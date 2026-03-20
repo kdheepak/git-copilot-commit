@@ -99,6 +99,20 @@ def test_build_split_plan_prompt_includes_unit_details() -> None:
     assert "Kind: new_file" in prompt
 
 
+def test_build_split_plan_prompt_can_omit_raw_patches() -> None:
+    units = extract_patch_units(MULTI_FILE_DIFF)
+
+    prompt = build_split_plan_prompt(
+        make_status(),
+        units,
+        include_patches=False,
+    )
+
+    assert "Patch units (summaries only):" in prompt
+    assert "Summary: src/app.py hunk 1/2" in prompt
+    assert "```diff" not in prompt
+
+
 def test_build_split_plan_prompt_supports_preferred_commit_count() -> None:
     units = extract_patch_units(MULTI_FILE_DIFF)
 
