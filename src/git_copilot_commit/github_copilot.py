@@ -183,10 +183,7 @@ class CopilotModel:
             limits = capabilities.get("limits")
             if isinstance(limits, dict):
                 raw_context_window = limits.get("max_context_window_tokens")
-                if (
-                    isinstance(raw_context_window, int)
-                    and raw_context_window > 0
-                ):
+                if isinstance(raw_context_window, int) and raw_context_window > 0:
                     max_context_window_tokens = raw_context_window
 
         endpoints: list[str] = []
