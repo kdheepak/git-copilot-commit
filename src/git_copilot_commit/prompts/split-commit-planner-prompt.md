@@ -7,7 +7,6 @@ small number of coherent commits.
 
 - Produce commit groupings that keep related changes together.
 - Separate clearly unrelated changes when the staged units support it.
-- Prefer fewer commits when the relationship is ambiguous.
 
 ## Rules
 
