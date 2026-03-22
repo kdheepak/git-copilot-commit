@@ -99,6 +99,34 @@ def test_alternate_index_commit_preserves_real_index_and_unstaged_changes(
     assert recent_messages == ["part 2", "part 1"]
 
 
+def test_alternate_index_supports_unborn_head(git_repo, git_repo_path) -> None:
+    file_path = git_repo_path / "README.md"
+    file_path.write_text("# Title\n", encoding="utf-8")
+    git_repo.stage_files(["README.md"])
+
+    staged_diff = git_repo.get_staged_diff(
+        extra_args=["--src-prefix=a/", "--dst-prefix=b/"]
+    )
+    assert "new file mode" in staged_diff
+
+    with git_repo.temporary_alternate_index() as alternate_index:
+        git_repo.check_patch_for_alternate_index(staged_diff, index=alternate_index)
+        git_repo.apply_patch_to_alternate_index(staged_diff, index=alternate_index)
+        commit_sha = git_repo.commit(
+            "docs: add readme",
+            env=alternate_index.env,
+            no_verify=True,
+        )
+
+    assert len(commit_sha) == 40
+    assert not alternate_index.path.exists()
+
+    final_status = git_repo.get_status()
+    assert not final_status.has_staged_changes
+    assert not final_status.has_unstaged_changes
+    assert git_repo.get_recent_commits(limit=1)[0][1] == "docs: add readme"
+
+
 def test_git_file_and_status_helper_properties() -> None:
     staged = GitFile(path="staged.py", status=" ", staged_status="M")
     unstaged = GitFile(path="unstaged.py", status="M", staged_status=" ")
@@ -201,3 +229,12 @@ def test_parse_status_output_build_env_and_commit_validation(git_repo) -> None:
 
     with pytest.raises(ValueError):
         git_repo.commit(None)
+
+
+def test_parse_status_output_preserves_leading_space_on_first_line(git_repo) -> None:
+    parsed = git_repo._parse_status_output(" M backend/service.py\nM  frontend.py\n")
+
+    assert [(file.staged_status, file.status, file.path) for file in parsed] == [
+        (" ", "M", "backend/service.py"),
+        ("M", " ", "frontend.py"),
+    ]

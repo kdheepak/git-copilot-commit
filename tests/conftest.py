@@ -23,6 +23,9 @@ def git_repo_path(tmp_path: Path) -> Path:
     run_git(tmp_path, "init", "-q")
     run_git(tmp_path, "config", "user.name", "Test User")
     run_git(tmp_path, "config", "user.email", "test@example.com")
+    hooks_dir = tmp_path / ".githooks"
+    hooks_dir.mkdir()
+    run_git(tmp_path, "config", "core.hooksPath", str(hooks_dir))
     return tmp_path
 
 

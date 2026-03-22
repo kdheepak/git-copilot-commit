@@ -672,6 +672,58 @@ def test_execute_split_commit_plan_creates_multiple_commits(
     assert recent_messages == ["chore: update last line", "chore: update first line"]
 
 
+def test_execute_split_commit_plan_supports_initial_commit(
+    git_repo,
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+    src_dir = git_repo_path / "src"
+    src_dir.mkdir()
+    app_file = src_dir / "app.lua"
+    readme_file = git_repo_path / "README.md"
+    app_file.write_text("print('hello')\n", encoding="utf-8")
+    readme_file.write_text("# Project\n", encoding="utf-8")
+    git_repo.stage_files(["src/app.lua", "README.md"])
+
+    patch_units = tuple(
+        extract_patch_units(git_repo.get_staged_diff(extra_args=SPLIT_DIFF_ARGS))
+    )
+    assert len(patch_units) == 2
+
+    prepared_commits = [
+        PreparedSplitCommit(
+            message=(
+                f"docs: add {patch_units[0].path}"
+                if patch_units[0].path.endswith(".md")
+                else f"feat: add {patch_units[0].path}"
+            ),
+            patch_units=(patch_units[0],),
+        ),
+        PreparedSplitCommit(
+            message=(
+                f"docs: add {patch_units[1].path}"
+                if patch_units[1].path.endswith(".md")
+                else f"feat: add {patch_units[1].path}"
+            ),
+            patch_units=(patch_units[1],),
+        ),
+    ]
+
+    commit_shas = execute_split_commit_plan(git_repo, prepared_commits, yes=True)
+
+    assert len(commit_shas) == 2
+    final_status = git_repo.get_status()
+    assert not final_status.has_staged_changes
+    assert not final_status.has_unstaged_changes
+
+    recent_messages = [message for _, message in git_repo.get_recent_commits(limit=2)]
+    assert recent_messages == [
+        prepared_commits[1].message,
+        prepared_commits[0].message,
+    ]
+
+
 def test_handle_split_commit_flow_falls_back_to_single_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
