@@ -139,7 +139,9 @@ class GitRepository:
         except subprocess.CalledProcessError:
             raise NotAGitRepositoryError(f"{self.cwd} is not a git repository")
         except subprocess.TimeoutExpired:
-            raise GitCommandError("Git command timed out: git rev-parse --show-toplevel")
+            raise GitCommandError(
+                "Git command timed out: git rev-parse --show-toplevel"
+            )
 
         repo_root = result.stdout.strip()
         if not repo_root:
@@ -264,10 +266,18 @@ class GitRepository:
         result = self._run_git_command(["rev-parse", ref])
         return result.stdout.strip()
 
+    def has_commit(self, ref: str = "HEAD") -> bool:
+        """Return whether the provided ref resolves to a commit."""
+        result = self._run_git_command(
+            ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+            check=False,
+        )
+        return result.returncode == 0
+
     def _parse_status_output(self, status_output: str) -> list[GitFile]:
         """Parse git status --porcelain output into GitFile objects."""
         files = []
-        for line in status_output.strip().split("\n"):
+        for line in status_output.splitlines():
             if not line:
                 continue
 
@@ -318,12 +328,13 @@ class GitRepository:
 
     def create_alternate_index(self, from_ref: str = "HEAD") -> AlternateGitIndex:
         """Create a temporary git index initialized from the provided ref."""
-        fd, index_path = tempfile.mkstemp(
-            prefix="git-copilot-commit-", suffix=".index"
-        )
+        fd, index_path = tempfile.mkstemp(prefix="git-copilot-commit-", suffix=".index")
         os.close(fd)
         alternate_index = AlternateGitIndex(Path(index_path))
-        self.read_tree(from_ref, index=alternate_index)
+        if from_ref == "HEAD" and not self.has_commit(from_ref):
+            self.read_empty_tree(index=alternate_index)
+        else:
+            self.read_tree(from_ref, index=alternate_index)
         return alternate_index
 
     @contextmanager
@@ -340,6 +351,10 @@ class GitRepository:
     def read_tree(self, ref: str, *, index: AlternateGitIndex) -> None:
         """Populate an alternate index from the provided ref."""
         self._run_git_command(["read-tree", ref], env=index.env)
+
+    def read_empty_tree(self, *, index: AlternateGitIndex) -> None:
+        """Initialize an alternate index with an empty tree."""
+        self._run_git_command(["read-tree", "--empty"], env=index.env)
 
     def apply_patch(
         self,
