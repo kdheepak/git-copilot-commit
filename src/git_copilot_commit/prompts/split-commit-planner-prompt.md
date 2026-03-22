@@ -15,6 +15,11 @@ small number of coherent commits.
 - Do not split a patch unit further.
 - Preserve the natural order of work. If unit `u1` appears before `u4` in the
   diff, prefer to keep that order within a commit.
+- Order commits the way experienced software developers usually land them:
+  foundational product code first, then tests that validate that code, then
+  docs/examples, then style/chore follow-ups.
+- If a docs or test unit depends on a feat/fix/refactor/perf unit, place the
+  docs or test commit after the underlying code change.
 - If multiple units belong to the same logical change, keep them together.
 - If the staged changes are best represented as a single coherent commit, return
   one commit.
