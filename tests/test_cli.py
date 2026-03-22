@@ -15,12 +15,14 @@ from git_copilot_commit.cli import (
     commit_with_retry_no_verify,
     display_selected_model,
     display_split_commit_plan,
+    extract_conventional_commit_type,
     execute_split_commit_plan,
     generate_commit_message_for_status,
     handle_split_commit_flow,
     load_named_prompt,
     load_system_prompt,
     normalize_model_name,
+    order_prepared_split_commits,
     print_copilot_error,
     preprocess_cli_args,
     resolve_prompt_file,
@@ -367,6 +369,36 @@ def test_build_http_client_config_and_normalize_model_name(
     assert normalize_model_name("github_copilot/gpt-5.4") == "gpt-5.4"
     assert normalize_model_name("gpt-5.4") == "gpt-5.4"
     assert normalize_model_name(None) is None
+
+
+def test_extract_conventional_commit_type_supports_scope_and_breaking_change() -> None:
+    assert extract_conventional_commit_type("feat(api): add endpoint") == "feat"
+    assert extract_conventional_commit_type("refactor!: simplify planner") == (
+        "refactor"
+    )
+    assert extract_conventional_commit_type("not a conventional commit") is None
+
+
+def test_order_prepared_split_commits_moves_follow_up_commits_after_core_changes() -> (
+    None
+):
+    prepared_commits = [
+        PreparedSplitCommit(message="docs: update README", patch_units=()),
+        PreparedSplitCommit(message="feat: add split planning", patch_units=()),
+        PreparedSplitCommit(message="test: cover split planning", patch_units=()),
+        PreparedSplitCommit(message="chore: update fixtures", patch_units=()),
+        PreparedSplitCommit(message="fix(parser): preserve ordering", patch_units=()),
+    ]
+
+    ordered = order_prepared_split_commits(prepared_commits)
+
+    assert [prepared_commit.message for prepared_commit in ordered] == [
+        "feat: add split planning",
+        "fix(parser): preserve ordering",
+        "test: cover split planning",
+        "docs: update README",
+        "chore: update fixtures",
+    ]
 
 
 def test_preprocess_cli_args_rewrites_split_syntax() -> None:
@@ -928,6 +960,81 @@ def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
         http_client_config=None,
     )
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
+
+
+def test_handle_split_commit_flow_reorders_prepared_commits_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = make_status(
+        staged_diff="diff --git a/src/example.py b/src/example.py\n+print('hi')\n"
+    )
+    repo = Mock()
+    repo.get_staged_diff.return_value = "diff"
+    patch_units = (
+        PatchUnit(
+            id="u1",
+            order=0,
+            path="README.md",
+            staged_status="A",
+            kind="new_file",
+            patch="patch 1",
+            summary="summary 1",
+        ),
+        PatchUnit(
+            id="u2",
+            order=1,
+            path="src/app.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 2",
+            summary="summary 2",
+        ),
+        PatchUnit(
+            id="u3",
+            order=2,
+            path="tests/test_app.py",
+            staged_status="M",
+            kind="hunk",
+            patch="patch 3",
+            summary="summary 3",
+        ),
+    )
+    split_plan = SplitCommitPlan(
+        commits=(
+            SplitPlanCommit(("u1",)),
+            SplitPlanCommit(("u2",)),
+            SplitPlanCommit(("u3",)),
+        )
+    )
+    unordered_commits = [
+        PreparedSplitCommit(message="docs: readme", patch_units=(patch_units[0],)),
+        PreparedSplitCommit(message="feat: app", patch_units=(patch_units[1],)),
+        PreparedSplitCommit(message="test: app", patch_units=(patch_units[2],)),
+    ]
+    expected_order = [
+        unordered_commits[1],
+        unordered_commits[2],
+        unordered_commits[0],
+    ]
+    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "request_split_commit_plan", Mock(return_value=split_plan))
+    monkeypatch.setattr(
+        cli, "request_split_commit_messages", Mock(return_value=unordered_commits)
+    )
+    display_plan = Mock()
+    execute_plan = Mock(return_value=["aaaabbbb", "ccccdddd", "eeeeffff"])
+    monkeypatch.setattr(cli, "display_split_commit_plan", display_plan)
+    monkeypatch.setattr(cli, "execute_split_commit_plan", execute_plan)
+    monkeypatch.setattr(cli, "handle_single_commit_flow", Mock())
+
+    handle_split_commit_flow(
+        repo,
+        status,
+        model="gpt-5.4",
+    )
+
+    display_plan.assert_called_once_with(expected_order)
+    execute_plan.assert_called_once_with(repo, expected_order, yes=False)
 
 
 def test_handle_split_commit_flow_prompts_when_plan_exceeds_preference(
