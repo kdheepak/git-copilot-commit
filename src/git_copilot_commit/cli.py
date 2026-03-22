@@ -5,6 +5,7 @@ git-copilot-commit - AI-powered Git commit assistant
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import re
 import sys
 from typing import Annotated, Sequence
 
@@ -94,6 +95,19 @@ class PreparedSplitCommit:
     patch_units: tuple[PatchUnit, ...]
 
 
+CORE_CHANGE_COMMIT_TYPES = frozenset({"feat", "fix", "perf", "refactor", "revert"})
+FOLLOW_UP_COMMIT_TYPE_PRIORITY = {
+    "test": 2,
+    "docs": 3,
+    "style": 4,
+    "chore": 4,
+}
+CONVENTIONAL_COMMIT_TYPE_PATTERN = re.compile(
+    r"^\s*([a-z]+)(?:\([^)\r\n]*\))?(?:!)?:",
+    re.IGNORECASE,
+)
+
+
 def preprocess_cli_args(args: Sequence[str]) -> list[str]:
     """Normalize CLI arguments before Click parses them."""
     processed_args: list[str] = []
@@ -140,6 +154,37 @@ def preprocess_cli_args(args: Sequence[str]) -> list[str]:
         index += 1
 
     return processed_args
+
+
+def extract_conventional_commit_type(message: str) -> str | None:
+    """Extract the Conventional Commit type from a generated title line."""
+    match = CONVENTIONAL_COMMIT_TYPE_PATTERN.match(message.strip())
+    if match is None:
+        return None
+
+    return match.group(1).lower()
+
+
+def order_prepared_split_commits(
+    prepared_commits: Sequence[PreparedSplitCommit],
+) -> list[PreparedSplitCommit]:
+    """Order planned commits in a developer-friendly execution sequence."""
+
+    def sort_key(item: tuple[int, PreparedSplitCommit]) -> tuple[int, int]:
+        index, prepared_commit = item
+        commit_type = extract_conventional_commit_type(prepared_commit.message)
+
+        if commit_type in CORE_CHANGE_COMMIT_TYPES:
+            priority = 0
+        elif commit_type is None:
+            priority = 1
+        else:
+            priority = FOLLOW_UP_COMMIT_TYPE_PRIORITY.get(commit_type, 1)
+
+        return priority, index
+
+    ordered_items = sorted(enumerate(prepared_commits), key=sort_key)
+    return [prepared_commit for _, prepared_commit in ordered_items]
 
 
 def run(args: Sequence[str] | None = None) -> None:
@@ -862,6 +907,7 @@ def handle_split_commit_flow(
         context=context,
         http_client_config=http_client_config,
     )
+    prepared_commits = order_prepared_split_commits(prepared_commits)
 
     if len(prepared_commits) == 1:
         console.print(
