@@ -807,9 +807,8 @@ def execute_split_commit_plan(
         try:
             if execution_state.original_head_sha is not None:
                 repo.soft_reset(execution_state.original_head_sha)
-            elif (
-                execution_state.original_head_ref is not None
-                and repo.has_commit("HEAD")
+            elif execution_state.original_head_ref is not None and repo.has_commit(
+                "HEAD"
             ):
                 repo.delete_ref(execution_state.original_head_ref)
         except GitError as exc:
