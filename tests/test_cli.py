@@ -672,6 +672,62 @@ def test_execute_split_commit_plan_creates_multiple_commits(
     assert recent_messages == ["chore: update last line", "chore: update first line"]
 
 
+def test_execute_split_commit_plan_rolls_back_partial_commits_on_interrupt(
+    git_repo,
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+    file_path = git_repo_path / "file.txt"
+    file_path.write_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n", encoding="utf-8")
+    git_repo.stage_files(["file.txt"])
+    git_repo.commit("init", no_verify=True)
+
+    file_path.write_text("A\nb\nc\nd\ne\nf\ng\nh\ni\nJ\n", encoding="utf-8")
+    git_repo.stage_files(["file.txt"])
+    file_path.write_text("A\nbb\nc\nd\ne\nf\ng\nhh\ni\nJ\nextra\n", encoding="utf-8")
+    original_status = git_repo.get_status()
+
+    patch_units = tuple(
+        extract_patch_units(git_repo.get_staged_diff(extra_args=SPLIT_DIFF_ARGS))
+    )
+    prepared_commits = [
+        PreparedSplitCommit(
+            message="chore: update first line",
+            patch_units=(patch_units[0],),
+        ),
+        PreparedSplitCommit(
+            message="chore: update last line",
+            patch_units=(patch_units[1],),
+        ),
+    ]
+
+    commit_attempts = 0
+
+    def interrupting_commit(repo, message, use_editor=False, env=None):
+        nonlocal commit_attempts
+        commit_attempts += 1
+        if commit_attempts == 2:
+            raise KeyboardInterrupt()
+
+        return commit_with_retry_no_verify(
+            repo,
+            message,
+            use_editor=use_editor,
+            env=env,
+        )
+
+    monkeypatch.setattr(cli, "commit_with_retry_no_verify", interrupting_commit)
+
+    with pytest.raises(KeyboardInterrupt):
+        execute_split_commit_plan(git_repo, prepared_commits, yes=True)
+
+    final_status = git_repo.get_status()
+    assert final_status.staged_diff == original_status.staged_diff
+    assert final_status.unstaged_diff == original_status.unstaged_diff
+    assert git_repo.get_recent_commits(limit=1)[0][1] == "init"
+
+
 def test_execute_split_commit_plan_supports_initial_commit(
     git_repo,
     git_repo_path,
@@ -722,6 +778,69 @@ def test_execute_split_commit_plan_supports_initial_commit(
         prepared_commits[1].message,
         prepared_commits[0].message,
     ]
+
+
+def test_execute_split_commit_plan_rolls_back_partial_initial_commits_on_interrupt(
+    git_repo,
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+    src_dir = git_repo_path / "src"
+    src_dir.mkdir()
+    app_file = src_dir / "app.lua"
+    readme_file = git_repo_path / "README.md"
+    app_file.write_text("print('hello')\n", encoding="utf-8")
+    readme_file.write_text("# Project\n", encoding="utf-8")
+    git_repo.stage_files(["src/app.lua", "README.md"])
+    original_status = git_repo.get_status()
+
+    patch_units = tuple(
+        extract_patch_units(git_repo.get_staged_diff(extra_args=SPLIT_DIFF_ARGS))
+    )
+    prepared_commits = [
+        PreparedSplitCommit(
+            message=(
+                f"docs: add {patch_units[0].path}"
+                if patch_units[0].path.endswith(".md")
+                else f"feat: add {patch_units[0].path}"
+            ),
+            patch_units=(patch_units[0],),
+        ),
+        PreparedSplitCommit(
+            message=(
+                f"docs: add {patch_units[1].path}"
+                if patch_units[1].path.endswith(".md")
+                else f"feat: add {patch_units[1].path}"
+            ),
+            patch_units=(patch_units[1],),
+        ),
+    ]
+
+    commit_attempts = 0
+
+    def interrupting_commit(repo, message, use_editor=False, env=None):
+        nonlocal commit_attempts
+        commit_attempts += 1
+        if commit_attempts == 2:
+            raise KeyboardInterrupt()
+
+        return commit_with_retry_no_verify(
+            repo,
+            message,
+            use_editor=use_editor,
+            env=env,
+        )
+
+    monkeypatch.setattr(cli, "commit_with_retry_no_verify", interrupting_commit)
+
+    with pytest.raises(KeyboardInterrupt):
+        execute_split_commit_plan(git_repo, prepared_commits, yes=True)
+
+    final_status = git_repo.get_status()
+    assert final_status.staged_diff == original_status.staged_diff
+    assert final_status.unstaged_diff == original_status.unstaged_diff
+    assert not git_repo.has_commit("HEAD")
 
 
 def test_handle_split_commit_flow_falls_back_to_single_commit(
