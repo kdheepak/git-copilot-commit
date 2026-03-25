@@ -274,6 +274,15 @@ class GitRepository:
         )
         return result.returncode == 0
 
+    def get_symbolic_head_ref(self) -> str | None:
+        """Return the symbolic ref for HEAD when attached to a branch."""
+        result = self._run_git_command(["symbolic-ref", "-q", "HEAD"], check=False)
+        if result.returncode != 0:
+            return None
+
+        ref = result.stdout.strip()
+        return ref or None
+
     def _parse_status_output(self, status_output: str) -> list[GitFile]:
         """Parse git status --porcelain output into GitFile objects."""
         files = []
@@ -325,6 +334,23 @@ class GitRepository:
             self._run_git_command(["reset", "HEAD"])
         else:
             self._run_git_command(["reset", "HEAD"] + self._normalize_paths(paths))
+
+    def soft_reset(self, ref: str) -> None:
+        """Move HEAD to ref while preserving the working tree and index."""
+        self._run_git_command(["reset", "--soft", ref])
+
+    def delete_ref(self, ref: str, *, missing_ok: bool = False) -> None:
+        """Delete a ref, optionally ignoring missing refs."""
+        result = self._run_git_command(["update-ref", "-d", ref], check=False)
+        if result.returncode == 0 or missing_ok:
+            return
+
+        error_output = result.stderr or result.stdout or ""
+        if error_output:
+            raise GitCommandError(
+                f"Git command failed: git update-ref -d {ref}\n{error_output}"
+            )
+        raise GitCommandError(f"Git command failed: git update-ref -d {ref}")
 
     def create_alternate_index(self, from_ref: str = "HEAD") -> AlternateGitIndex:
         """Create a temporary git index initialized from the provided ref."""

@@ -95,6 +95,14 @@ class PreparedSplitCommit:
     patch_units: tuple[PatchUnit, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class SplitCommitExecutionState:
+    """Original HEAD state used to roll back partial split-commit execution."""
+
+    original_head_sha: str | None
+    original_head_ref: str | None
+
+
 CORE_CHANGE_COMMIT_TYPES = frozenset({"feat", "fix", "perf", "refactor", "revert"})
 FOLLOW_UP_COMMIT_TYPE_PRIORITY = {
     "test": 2,
@@ -757,39 +765,63 @@ def execute_split_commit_plan(
             console.print("Invalid choice. Commit cancelled.")
             raise typer.Exit()
 
+    execution_state = SplitCommitExecutionState(
+        original_head_sha=repo.get_head_sha() if repo.has_commit("HEAD") else None,
+        original_head_ref=repo.get_symbolic_head_ref(),
+    )
     commit_shas: list[str] = []
     total_commits = len(prepared_commits)
 
-    for index, prepared_commit in enumerate(prepared_commits, start=1):
-        console.print(
-            f"[cyan]Creating commit {index}/{total_commits}:[/cyan] {prepared_commit.message}"
-        )
-
-        with repo.temporary_alternate_index() as alternate_index:
-            try:
-                for patch_unit in prepared_commit.patch_units:
-                    repo.check_patch_for_alternate_index(
-                        patch_unit.patch,
-                        index=alternate_index,
-                    )
-                    repo.apply_patch_to_alternate_index(
-                        patch_unit.patch,
-                        index=alternate_index,
-                    )
-            except GitError as exc:
-                console.print(
-                    f"[red]Failed to apply the planned changes for commit {index}: {exc}[/red]"
-                )
-                raise typer.Exit(1)
-
-            commit_shas.append(
-                commit_with_retry_no_verify(
-                    repo,
-                    prepared_commit.message,
-                    use_editor=use_editor,
-                    env=alternate_index.env,
-                )
+    try:
+        for index, prepared_commit in enumerate(prepared_commits, start=1):
+            console.print(
+                f"[cyan]Creating commit {index}/{total_commits}:[/cyan] {prepared_commit.message}"
             )
+
+            with repo.temporary_alternate_index() as alternate_index:
+                try:
+                    for patch_unit in prepared_commit.patch_units:
+                        repo.check_patch_for_alternate_index(
+                            patch_unit.patch,
+                            index=alternate_index,
+                        )
+                        repo.apply_patch_to_alternate_index(
+                            patch_unit.patch,
+                            index=alternate_index,
+                        )
+                except GitError as exc:
+                    console.print(
+                        f"[red]Failed to apply the planned changes for commit {index}: {exc}[/red]"
+                    )
+                    raise typer.Exit(1)
+
+                commit_shas.append(
+                    commit_with_retry_no_verify(
+                        repo,
+                        prepared_commit.message,
+                        use_editor=use_editor,
+                        env=alternate_index.env,
+                    )
+                )
+    except BaseException:
+        try:
+            if execution_state.original_head_sha is not None:
+                repo.soft_reset(execution_state.original_head_sha)
+            elif (
+                execution_state.original_head_ref is not None
+                and repo.has_commit("HEAD")
+            ):
+                repo.delete_ref(execution_state.original_head_ref)
+        except GitError as exc:
+            console.print(
+                "[red]Failed to restore the original staged changes after split commit creation stopped early: "
+                f"{exc}[/red]"
+            )
+        else:
+            console.print(
+                "[yellow]Split commit creation did not complete; restored the original staged changes.[/yellow]"
+            )
+        raise
 
     return commit_shas
 
