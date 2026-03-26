@@ -21,6 +21,7 @@ small number of coherent commits.
 - If a docs or test unit depends on a feat/fix/refactor/perf unit, place the
   docs or test commit after the underlying code change.
 - If multiple units belong to the same logical change, keep them together.
+- If multiple units are the same change, even if they are across files, keep them together.
 - If the staged changes are best represented as a single coherent commit, return
   one commit.
 
