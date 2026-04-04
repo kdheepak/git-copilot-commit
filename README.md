@@ -4,14 +4,15 @@
 [![PyPI](https://img.shields.io/pypi/v/git-copilot-commit)](https://pypi.org/project/git-copilot-commit/)
 [![License](https://img.shields.io/github/license/kdheepak/git-copilot-commit)](https://github.com/kdheepak/git-copilot-commit/blob/main/LICENSE)
 
-AI-powered Git commit assistant that generates conventional commit messages using GitHub Copilot.
+AI-powered Git commit assistant that generates conventional commit messages using GitHub Copilot or any OpenAI-compatible LLM.
 
 ![Screenshot of git-copilot-commit in action](https://github.com/user-attachments/assets/6a6d70a6-6060-44e6-8cf4-a6532e9e9142)
 
 ## Features
 
 - Generates commit messages based on your staged changes
-- Supports multiple LLM models: GPT-4, Claude, Gemini, and more
+- Supports GitHub Copilot and OpenAI-compatible `/v1/models` + `/v1/chat/completions` APIs
+- Supports multiple LLM models: GPT, Claude, Gemini, local models, and more
 - Allows editing of generated messages before committing
 - Follows the [Conventional Commits](https://www.conventionalcommits.org/) standard
 
@@ -51,9 +52,11 @@ git-copilot-commit --help
 
 ## Prerequisites
 
-- Active GitHub Copilot subscription
+- Either an active GitHub Copilot subscription or access to an OpenAI-compatible API endpoint
 
 ## Quick Start
+
+### GitHub Copilot
 
 1. Authenticate with GitHub Copilot:
 
@@ -77,6 +80,27 @@ git-copilot-commit --help
    uvx git-copilot-commit commit --all --yes
    ```
 
+### OpenAI-compatible provider
+
+1. Point the CLI at your server:
+
+   ```bash
+   uvx git-copilot-commit models \
+     --provider openai \
+     --base-url http://127.0.0.1:11434/v1
+   ```
+
+2. Generate and commit:
+
+   ```bash
+   uvx git-copilot-commit commit \
+     --provider openai \
+     --base-url http://127.0.0.1:11434/v1 \
+     --model your-model-id
+   ```
+
+   If your server requires an API key, also pass `--api-key ...` or set `OPENAI_API_KEY`.
+
 ## Usage
 
 ### Commit changes
@@ -95,6 +119,9 @@ $ uvx git-copilot-commit commit --help
 │ --model       -m                     MODEL_ID  Model to use for generating commit message                │
 │ --yes         -y                               Automatically accept the generated commit message         │
 │ --context     -c                     TEXT      Optional user-provided context to guide commit message    │
+│ --provider                           TEXT      LLM provider to use: copilot or openai                   │
+│ --base-url                           URL       Base URL for an OpenAI-compatible provider                │
+│ --api-key                            TEXT      API key for an OpenAI-compatible provider                 │
 │ --ca-bundle                          PATH      Path to a custom CA bundle (PEM)                          │
 │ --insecure                                     Disable SSL certificate verification.                     │
 │ --native-tls      --no-native-tls              Use the OS's native certificate store via 'truststore'    │
@@ -123,6 +150,15 @@ Use a specific model:
 
 ```bash
 uvx git-copilot-commit commit --model claude-3.5-sonnet
+```
+
+Use a local OpenAI-compatible server:
+
+```bash
+uvx git-copilot-commit commit \
+  --provider openai \
+  --base-url http://127.0.0.1:11434/v1 \
+  --model your-model-id
 ```
 
 Split staged hunks into separate commits:
@@ -177,6 +213,14 @@ specify which model should be used to generate the commit in one CLI invocation.
 
 ```bash
 git ai-commit --all --yes --model claude-3.5-sonnet
+```
+
+You can also set provider defaults with environment variables:
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+export OPENAI_API_KEY=...
+git ai-commit --provider openai --model your-model-id
 ```
 
 > [!TIP]

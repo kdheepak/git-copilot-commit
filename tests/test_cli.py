@@ -6,7 +6,7 @@ import typer
 from typer.testing import CliRunner
 
 import git_copilot_commit.cli as cli
-from git_copilot_commit import github_copilot
+from git_copilot_commit.llms import core as llm
 from git_copilot_commit.cli import (
     PreparedSplitCommit,
     build_http_client_config,
@@ -23,7 +23,7 @@ from git_copilot_commit.cli import (
     load_system_prompt,
     normalize_model_name,
     order_prepared_split_commits,
-    print_copilot_error,
+    print_llm_error,
     preprocess_cli_args,
     resolve_prompt_file,
     run,
@@ -92,11 +92,11 @@ def test_generate_commit_message_for_status_normalizes_model_prefix(
     )
     mock_ask = Mock(return_value="feat: add example")
     monkeypatch.setattr(cli, "load_system_prompt", Mock(return_value="system prompt"))
-    monkeypatch.setattr(cli.github_copilot, "ask", mock_ask)
+    monkeypatch.setattr(cli.providers, "ask", mock_ask)
 
     message = generate_commit_message_for_status(
         status,
-        model="github_copilot/gpt-5.4",
+        model="copilot/gpt-5.4",
         context="Prefer feat scope",
     )
 
@@ -118,7 +118,7 @@ def test_generate_commit_message_for_status_retries_without_diff_on_context_over
     mock_print = Mock()
     mock_ask = Mock(
         side_effect=[
-            github_copilot.CopilotHttpError(
+            llm.LLMHttpError(
                 400,
                 "Bad Request",
                 "This model's maximum context length was exceeded.",
@@ -128,7 +128,7 @@ def test_generate_commit_message_for_status_retries_without_diff_on_context_over
     )
     monkeypatch.setattr(cli.console, "print", mock_print)
     monkeypatch.setattr(cli, "load_system_prompt", Mock(return_value="system prompt"))
-    monkeypatch.setattr(cli.github_copilot, "ask", mock_ask)
+    monkeypatch.setattr(cli.providers, "ask", mock_ask)
 
     message = generate_commit_message_for_status(status)
 
@@ -181,7 +181,7 @@ def test_request_split_commit_plan_retries_without_patches_on_context_overflow(
     mock_print = Mock()
     mock_ask = Mock(
         side_effect=[
-            github_copilot.CopilotHttpError(
+            llm.LLMHttpError(
                 400,
                 "Bad Request",
                 (
@@ -194,7 +194,7 @@ def test_request_split_commit_plan_retries_without_patches_on_context_overflow(
     )
     monkeypatch.setattr(cli.console, "print", mock_print)
     monkeypatch.setattr(cli, "load_named_prompt", Mock(return_value="system prompt"))
-    monkeypatch.setattr(cli, "ask_copilot_with_system_prompt", mock_ask)
+    monkeypatch.setattr(cli, "ask_llm_with_system_prompt", mock_ask)
 
     plan = cli.request_split_commit_plan(status, patch_units)
 
@@ -299,26 +299,26 @@ def test_confirm_split_commit_count_assumes_yes_means_proceed() -> None:
     assert resolved_plan == plan
 
 
-def test_print_copilot_error_uses_rich_model_selection_format(
+def test_print_llm_error_uses_rich_model_selection_format(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mock_console_print = Mock()
     mock_print_model_selection_error = Mock()
     monkeypatch.setattr(cli.console, "print", mock_console_print)
     monkeypatch.setattr(
-        cli.github_copilot,
+        cli.llm,
         "print_model_selection_error",
         mock_print_model_selection_error,
     )
-    exc = github_copilot.ModelSelectionError(
+    exc = llm.ModelSelectionError(
         models=[
-            github_copilot.CopilotModel(id="gpt-5.4", name="GPT-5.4"),
-            github_copilot.CopilotModel(id="gpt-5.3-codex", name="GPT-5.3 Codex"),
+            llm.Model(id="gpt-5.4", name="GPT-5.4"),
+            llm.Model(id="gpt-5.3-codex", name="GPT-5.3 Codex"),
         ],
         requested_model="nope",
     )
 
-    print_copilot_error("Could not generate a commit message", exc)
+    print_llm_error("Could not generate a commit message", exc)
 
     mock_console_print.assert_called_once_with(
         "[red]Could not generate a commit message[/red]"
@@ -331,7 +331,7 @@ def test_display_selected_model_shows_resolved_model(
 ) -> None:
     mock_print = Mock()
     monkeypatch.setattr(cli.console, "print", mock_print)
-    model = github_copilot.CopilotModel(
+    model = llm.Model(
         id="gpt-5.4",
         name="GPT-5.4",
         vendor="openai",
@@ -366,7 +366,8 @@ def test_build_http_client_config_and_normalize_model_name(
 
     assert config.ca_bundle == str(tmp_path / "certs" / "custom.pem")
     assert not config.use_native_tls
-    assert normalize_model_name("github_copilot/gpt-5.4") == "gpt-5.4"
+    assert normalize_model_name("copilot/gpt-5.4") == "gpt-5.4"
+    assert normalize_model_name("openai/llama3.2") == "llama3.2"
     assert normalize_model_name("gpt-5.4") == "gpt-5.4"
     assert normalize_model_name(None) is None
 
@@ -607,9 +608,9 @@ def test_commit_command_from_subdirectory_stages_the_entire_repository(
     monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
     monkeypatch.setattr(cli, "ensure_copilot_authentication", lambda _config: None)
     monkeypatch.setattr(
-        cli.github_copilot,
-        "ensure_auth_ready",
-        lambda **_kwargs: github_copilot.CopilotModel(
+        cli.providers,
+        "ensure_model_ready",
+        lambda **_kwargs: llm.Model(
             id="gpt-5.4",
             name="GPT-5.4",
             vendor="openai",
@@ -626,6 +627,60 @@ def test_commit_command_from_subdirectory_stages_the_entire_repository(
     assert result.exit_code == 0
     assert repo.get_recent_commits(limit=1)[0][1] == "chore: commit nested changes"
     assert not repo.get_status().files
+
+
+def test_commit_command_supports_openai_provider_without_copilot_auth(
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = cli.GitRepository(git_repo_path)
+    file_path = git_repo_path / "file.txt"
+    file_path.write_text("one\n", encoding="utf-8")
+    repo.stage_files(["file.txt"])
+    repo.commit("chore: init", no_verify=True)
+    file_path.write_text("two\n", encoding="utf-8")
+
+    auth_called = False
+
+    def fail_if_called(_config):
+        nonlocal auth_called
+        auth_called = True
+        raise AssertionError("Copilot authentication should not run for openai")
+
+    monkeypatch.setattr(cli, "ensure_copilot_authentication", fail_if_called)
+    monkeypatch.setattr(
+        cli.providers,
+        "ensure_model_ready",
+        lambda **_kwargs: llm.Model(
+            id="llama3.2",
+            name="llama3.2",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "request_commit_message",
+        lambda *_args, **_kwargs: "chore: use openai-compatible provider",
+    )
+    monkeypatch.chdir(git_repo_path)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "commit",
+            "--all",
+            "--yes",
+            "--provider",
+            "openai",
+            "--base-url",
+            "http://127.0.0.1:11434/v1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert not auth_called
+    assert repo.get_recent_commits(limit=1)[0][1] == (
+        "chore: use openai-compatible provider"
+    )
 
 
 def test_execute_split_commit_plan_creates_multiple_commits(
@@ -919,6 +974,7 @@ def test_handle_split_commit_flow_auto_mode_always_requests_split_planning(
         preferred_commits=None,
         model="gpt-5.4",
         context="",
+        provider_config=None,
         http_client_config=None,
     )
 
@@ -1054,6 +1110,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
         preferred_commits=None,
         model="gpt-5.4",
         context="",
+        provider_config=None,
         http_client_config=None,
     )
     request_messages.assert_called_once_with(
@@ -1061,6 +1118,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
         patch_units,
         model="gpt-5.4",
         context="",
+        provider_config=None,
         http_client_config=None,
     )
     display_plan.assert_called_once_with(prepared_commits)
@@ -1128,6 +1186,7 @@ def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
         preferred_commits=2,
         model="gpt-5.4",
         context="",
+        provider_config=None,
         http_client_config=None,
     )
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
@@ -1337,5 +1396,6 @@ def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
         preferred_commits=3,
         model="gpt-5.4",
         context="",
+        provider_config=None,
         http_client_config=None,
     )

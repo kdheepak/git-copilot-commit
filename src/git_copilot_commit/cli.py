@@ -29,7 +29,9 @@ from .split_commits import (
 )
 from .settings import Settings
 from .version import __version__
-from . import github_copilot
+from .llms import copilot
+from .llms import core as llm
+from .llms import providers
 
 console = Console()
 app = typer.Typer(help=__doc__, add_completion=False)
@@ -64,6 +66,31 @@ InsecureOption = Annotated[
 NativeTlsOption = Annotated[
     bool,
     typer.Option("--native-tls/--no-native-tls", help=NATIVE_TLS_HELP),
+]
+ProviderOption = Annotated[
+    str | None,
+    typer.Option(
+        "--provider",
+        help="LLM provider to use: copilot or openai.",
+    ),
+]
+BaseUrlOption = Annotated[
+    str | None,
+    typer.Option(
+        "--base-url",
+        metavar="URL",
+        help=(
+            "Base URL for an OpenAI-compatible provider, for example "
+            "http://127.0.0.1:11434/v1."
+        ),
+    ),
+]
+ApiKeyOption = Annotated[
+    str | None,
+    typer.Option(
+        "--api-key",
+        help="API key for an OpenAI-compatible provider. Omit when the server does not require one.",
+    ),
 ]
 
 
@@ -293,29 +320,29 @@ def build_http_client_config(
     ca_bundle: str | None,
     insecure: bool,
     native_tls: bool,
-) -> github_copilot.HttpClientConfig:
+) -> llm.HttpClientConfig:
     if ca_bundle is not None:
         ca_bundle = os.path.expanduser(ca_bundle)
-    return github_copilot.HttpClientConfig(
+    return llm.HttpClientConfig(
         native_tls=native_tls,
         insecure=insecure,
         ca_bundle=ca_bundle,
     )
 
 
-def print_copilot_error(message: str, exc: github_copilot.CopilotError) -> None:
-    """Render Copilot errors, with rich formatting for model selection issues."""
-    if isinstance(exc, github_copilot.ModelSelectionError):
+def print_llm_error(message: str, exc: llm.LLMError) -> None:
+    """Render LLM errors, with rich formatting for model selection issues."""
+    if isinstance(exc, llm.ModelSelectionError):
         console.print(f"[red]{message}[/red]")
-        github_copilot.print_model_selection_error(exc)
+        llm.print_model_selection_error(exc)
         return
 
     console.print(f"[red]{message}: {exc}[/red]")
 
 
-def display_selected_model(model: github_copilot.CopilotModel) -> None:
-    """Show the resolved Copilot model for the current command."""
-    details = [github_copilot.infer_api_surface(model)]
+def display_selected_model(model: llm.Model) -> None:
+    """Show the resolved model for the current command."""
+    details = [llm.infer_api_surface(model)]
     if model.vendor:
         details.insert(0, model.vendor)
     console.print(f"[green]Using model:[/green] {model.id} ({', '.join(details)})")
@@ -352,20 +379,27 @@ def build_commit_message_prompt(
 
 
 def normalize_model_name(model: str | None) -> str | None:
-    """Normalize model names accepted by the CLI to Copilot API model ids."""
-    if model is not None and model.startswith("github_copilot/"):
-        return model.replace("github_copilot/", "", 1)
+    """Normalize model names accepted by the CLI to provider model ids."""
+    if model is not None:
+        for prefix in (
+            "copilot/",
+            "openai/",
+            "openai-compatible/",
+        ):
+            if model.startswith(prefix):
+                return model.replace(prefix, "", 1)
     return model
 
 
-def ask_copilot_with_system_prompt(
+def ask_llm_with_system_prompt(
     system_prompt: str,
     prompt: str,
     model: str | None = None,
-    http_client_config: github_copilot.HttpClientConfig | None = None,
+    provider_config: providers.ProviderConfig | None = None,
+    http_client_config: llm.HttpClientConfig | None = None,
 ) -> str:
-    """Send a prepared prompt to Copilot using the provided system prompt."""
-    return github_copilot.ask(
+    """Send a prepared prompt to the selected LLM provider."""
+    return providers.ask(
         f"""
 # System Prompt
 
@@ -375,6 +409,7 @@ def ask_copilot_with_system_prompt(
 
 {prompt}
             """,
+        provider_config=provider_config,
         model=normalize_model_name(model),
         http_client_config=http_client_config,
     )
@@ -383,20 +418,22 @@ def ask_copilot_with_system_prompt(
 def generate_commit_message_for_prompt(
     prompt: str,
     model: str | None = None,
-    http_client_config: github_copilot.HttpClientConfig | None = None,
+    provider_config: providers.ProviderConfig | None = None,
+    http_client_config: llm.HttpClientConfig | None = None,
 ) -> str:
     """Generate a conventional commit message from a prepared prompt."""
-    return ask_copilot_with_system_prompt(
+    return ask_llm_with_system_prompt(
         load_system_prompt(),
         prompt,
         model=model,
+        provider_config=provider_config,
         http_client_config=http_client_config,
     )
 
 
-def should_retry_with_compact_prompt(exc: github_copilot.CopilotError) -> bool:
+def should_retry_with_compact_prompt(exc: llm.LLMError) -> bool:
     message_parts = [str(exc)]
-    if isinstance(exc, github_copilot.CopilotHttpError) and exc.detail:
+    if isinstance(exc, llm.LLMHttpError) and exc.detail:
         message_parts.append(exc.detail)
 
     haystack = " ".join(part.strip() for part in message_parts if part).lower()
@@ -422,7 +459,8 @@ def generate_commit_message_for_status(
     status: GitStatus,
     model: str | None = None,
     context: str = "",
-    http_client_config: github_copilot.HttpClientConfig | None = None,
+    provider_config: providers.ProviderConfig | None = None,
+    http_client_config: llm.HttpClientConfig | None = None,
 ) -> str:
     """Generate a commit message for a staged status snapshot."""
     full_prompt = build_commit_message_prompt(status, context=context)
@@ -430,9 +468,10 @@ def generate_commit_message_for_status(
         return generate_commit_message_for_prompt(
             full_prompt,
             model=model,
+            provider_config=provider_config,
             http_client_config=http_client_config,
         )
-    except github_copilot.CopilotError as exc:
+    except llm.LLMError as exc:
         if not should_retry_with_compact_prompt(exc):
             raise
 
@@ -447,6 +486,7 @@ def generate_commit_message_for_status(
     return generate_commit_message_for_prompt(
         fallback_prompt,
         model=model,
+        provider_config=provider_config,
         http_client_config=http_client_config,
     )
 
@@ -476,24 +516,24 @@ def commit_with_retry_no_verify(
 
 
 def ensure_copilot_authentication(
-    http_client_config: github_copilot.HttpClientConfig,
+    http_client_config: llm.HttpClientConfig,
 ) -> None:
     """Authenticate if no cached Copilot credentials are available."""
     try:
-        existing_credentials = github_copilot.load_credentials()
-    except github_copilot.CopilotError:
+        existing_credentials = copilot.load_credentials()
+    except copilot.LLMError:
         existing_credentials = None
 
     if existing_credentials is not None:
         return
 
     try:
-        github_copilot.login(
+        copilot.login(
             force=True,
             http_client_config=http_client_config,
         )
-    except github_copilot.CopilotError as exc:
-        print_copilot_error("Authentication failed", exc)
+    except copilot.LLMError as exc:
+        print_llm_error("Authentication failed", exc)
         raise typer.Exit(1)
 
 
@@ -533,7 +573,8 @@ def request_commit_message(
     status: GitStatus,
     model: str | None = None,
     context: str = "",
-    http_client_config: github_copilot.HttpClientConfig | None = None,
+    provider_config: providers.ProviderConfig | None = None,
+    http_client_config: llm.HttpClientConfig | None = None,
 ) -> str:
     """Request a commit message for the provided staged state."""
     try:
@@ -544,10 +585,11 @@ def request_commit_message(
                 status,
                 model=model,
                 context=context,
+                provider_config=provider_config,
                 http_client_config=http_client_config,
             )
-    except github_copilot.CopilotError as exc:
-        print_copilot_error("Could not generate a commit message", exc)
+    except llm.LLMError as exc:
+        print_llm_error("Could not generate a commit message", exc)
         raise typer.Exit(1)
 
 
@@ -558,7 +600,8 @@ def request_split_commit_plan(
     preferred_commits: int | None = None,
     model: str | None = None,
     context: str = "",
-    http_client_config: github_copilot.HttpClientConfig | None = None,
+    provider_config: providers.ProviderConfig | None = None,
+    http_client_config: llm.HttpClientConfig | None = None,
 ) -> SplitCommitPlan:
     """Request and validate a split-commit plan for the staged patch units."""
     planner_system_prompt = load_named_prompt(SPLIT_COMMIT_PLANNER_PROMPT_FILENAME)
@@ -573,15 +616,16 @@ def request_split_commit_plan(
         with console.status(
             "[yellow]Planning split commits from [bold]staged hunks[/] ...[/yellow]"
         ):
-            response = ask_copilot_with_system_prompt(
+            response = ask_llm_with_system_prompt(
                 planner_system_prompt,
                 planner_prompt,
                 model=model,
+                provider_config=provider_config,
                 http_client_config=http_client_config,
             )
-    except github_copilot.CopilotError as exc:
+    except llm.LLMError as exc:
         if not should_retry_with_compact_prompt(exc):
-            print_copilot_error("Could not generate a split commit plan", exc)
+            print_llm_error("Could not generate a split commit plan", exc)
             raise typer.Exit(1)
 
         console.print(
@@ -605,14 +649,15 @@ def request_split_commit_plan(
         with console.status(
             "[yellow]Planning split commits from [bold]patch summaries[/] ...[/yellow]"
         ):
-            response = ask_copilot_with_system_prompt(
+            response = ask_llm_with_system_prompt(
                 planner_system_prompt,
                 compact_planner_prompt,
                 model=model,
+                provider_config=provider_config,
                 http_client_config=http_client_config,
             )
-    except github_copilot.CopilotError as exc:
-        print_copilot_error("Could not generate a split commit plan", exc)
+    except llm.LLMError as exc:
+        print_llm_error("Could not generate a split commit plan", exc)
         raise typer.Exit(1)
 
     return parse_split_plan_response(
@@ -627,7 +672,8 @@ def request_split_commit_messages(
     *,
     model: str | None = None,
     context: str = "",
-    http_client_config: github_copilot.HttpClientConfig | None = None,
+    provider_config: providers.ProviderConfig | None = None,
+    http_client_config: llm.HttpClientConfig | None = None,
 ) -> list[PreparedSplitCommit]:
     """Generate commit messages for each planned split-commit group."""
     try:
@@ -643,6 +689,7 @@ def request_split_commit_messages(
                     build_status_for_patch_units(unit_group),
                     model=model,
                     context=context,
+                    provider_config=provider_config,
                     http_client_config=http_client_config,
                 )
 
@@ -651,8 +698,8 @@ def request_split_commit_messages(
             )
 
         return prepared_commits
-    except github_copilot.CopilotError as exc:
-        print_copilot_error("Could not generate split commit messages", exc)
+    except llm.LLMError as exc:
+        print_llm_error("Could not generate split commit messages", exc)
         raise typer.Exit(1)
 
 
@@ -832,13 +879,15 @@ def handle_single_commit_flow(
     model: str | None = None,
     yes: bool = False,
     context: str = "",
-    http_client_config: github_copilot.HttpClientConfig | None = None,
+    provider_config: providers.ProviderConfig | None = None,
+    http_client_config: llm.HttpClientConfig | None = None,
 ) -> None:
     """Generate, display, and execute the single-commit flow."""
     commit_message = request_commit_message(
         status,
         model=model,
         context=context,
+        provider_config=provider_config,
         http_client_config=http_client_config,
     )
     display_commit_message(commit_message)
@@ -855,7 +904,8 @@ def handle_split_commit_flow(
     model: str | None = None,
     yes: bool = False,
     context: str = "",
-    http_client_config: github_copilot.HttpClientConfig | None = None,
+    provider_config: providers.ProviderConfig | None = None,
+    http_client_config: llm.HttpClientConfig | None = None,
 ) -> None:
     """Generate, display, and execute the split-commit flow."""
     patch_units = tuple(
@@ -872,6 +922,7 @@ def handle_split_commit_flow(
             model=model,
             yes=yes,
             context=context,
+            provider_config=provider_config,
             http_client_config=http_client_config,
         )
         return
@@ -886,6 +937,7 @@ def handle_split_commit_flow(
             model=model,
             yes=yes,
             context=context,
+            provider_config=provider_config,
             http_client_config=http_client_config,
         )
         return
@@ -907,6 +959,7 @@ def handle_split_commit_flow(
             preferred_commits=preferred_commits,
             model=model,
             context=context,
+            provider_config=provider_config,
             http_client_config=http_client_config,
         )
     except SplitPlanningError as exc:
@@ -920,6 +973,7 @@ def handle_split_commit_flow(
             model=model,
             yes=yes,
             context=context,
+            provider_config=provider_config,
             http_client_config=http_client_config,
         )
         return
@@ -936,6 +990,7 @@ def handle_split_commit_flow(
         patch_units,
         model=model,
         context=context,
+        provider_config=provider_config,
         http_client_config=http_client_config,
     )
     prepared_commits = order_prepared_split_commits(prepared_commits)
@@ -979,37 +1034,51 @@ def authenticate(
         native_tls=native_tls,
     )
     try:
-        github_copilot.login(
+        copilot.login(
             enterprise_domain=enterprise_domain,
             force=force,
             http_client_config=http_client_config,
         )
-    except github_copilot.CopilotError as exc:
-        print_copilot_error("Authentication failed", exc)
+    except copilot.LLMError as exc:
+        print_llm_error("Authentication failed", exc)
         raise typer.Exit(1)
 
 
 @app.command("summary")
 def summary(
+    provider: ProviderOption = None,
+    base_url: BaseUrlOption = None,
+    api_key: ApiKeyOption = None,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
     native_tls: NativeTlsOption = False,
 ):
-    """Show the current cached GitHub Copilot login summary."""
+    """Show the configured LLM provider summary."""
     http_client_config = build_http_client_config(
         ca_bundle=ca_bundle,
         insecure=insecure,
         native_tls=native_tls,
     )
     try:
-        github_copilot.show_login_summary(http_client_config=http_client_config)
-    except github_copilot.CopilotError as exc:
-        print_copilot_error("Could not load login summary", exc)
+        provider_config = providers.resolve_provider_config(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+        )
+        providers.show_summary(
+            provider_config=provider_config,
+            http_client_config=http_client_config,
+        )
+    except llm.LLMError as exc:
+        print_llm_error("Could not load provider summary", exc)
         raise typer.Exit(1)
 
 
 @app.command("models")
 def models_command(
+    provider: ProviderOption = None,
+    base_url: BaseUrlOption = None,
+    api_key: ApiKeyOption = None,
     vendor: str | None = typer.Option(
         None,
         "--vendor",
@@ -1019,7 +1088,7 @@ def models_command(
     insecure: InsecureOption = False,
     native_tls: NativeTlsOption = False,
 ):
-    """List available Copilot models for the current account."""
+    """List available models for the configured LLM provider."""
     http_client_config = build_http_client_config(
         ca_bundle=ca_bundle,
         insecure=insecure,
@@ -1027,16 +1096,26 @@ def models_command(
     )
 
     try:
-        credentials, models = github_copilot.get_available_models(
+        provider_config = providers.resolve_provider_config(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+        )
+        inventory = providers.get_available_models(
+            provider_config=provider_config,
             vendor=vendor,
             http_client_config=http_client_config,
         )
 
-        console.print(f"[green]Copilot base URL:[/green] {credentials.base_url()}")
-        console.print(f"[green]Model count:[/green] {len(models)}")
-        github_copilot.print_model_table(models)
-    except github_copilot.CopilotError as exc:
-        print_copilot_error("Could not load models", exc)
+        console.print(f"[green]LLM provider:[/green] {provider_config.display_name}")
+        console.print(f"[green]Base URL:[/green] {inventory.base_url}")
+        console.print(f"[green]Model count:[/green] {len(inventory.models)}")
+        llm.print_model_table(
+            inventory.models,
+            title=f"Available {provider_config.display_name} Models",
+        )
+    except llm.LLMError as exc:
+        print_llm_error("Could not load models", exc)
         raise typer.Exit(1)
 
 
@@ -1063,6 +1142,9 @@ def commit(
         "-c",
         help="Optional user-provided context to guide commit message",
     ),
+    provider: ProviderOption = None,
+    base_url: BaseUrlOption = None,
+    api_key: ApiKeyOption = None,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
     native_tls: NativeTlsOption = False,
@@ -1081,7 +1163,18 @@ def commit(
         insecure=insecure,
         native_tls=native_tls,
     )
-    ensure_copilot_authentication(http_client_config)
+    try:
+        provider_config = providers.resolve_provider_config(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key,
+        )
+    except llm.LLMError as exc:
+        print_llm_error("Could not resolve the LLM provider", exc)
+        raise typer.Exit(1)
+
+    if provider_config.provider == "copilot":
+        ensure_copilot_authentication(http_client_config)
 
     # Get initial status
     status = repo.get_status()
@@ -1099,12 +1192,13 @@ def commit(
 
     normalized_model = normalize_model_name(model)
     try:
-        selected_model = github_copilot.ensure_auth_ready(
+        selected_model = providers.ensure_model_ready(
+            provider_config=provider_config,
             model=normalized_model,
             http_client_config=http_client_config,
         )
-    except github_copilot.CopilotError as exc:
-        print_copilot_error("Could not select a model", exc)
+    except llm.LLMError as exc:
+        print_llm_error("Could not select a model", exc)
         raise typer.Exit(1)
 
     display_selected_model(selected_model)
@@ -1118,6 +1212,7 @@ def commit(
             model=model,
             yes=yes,
             context=context,
+            provider_config=provider_config,
             http_client_config=http_client_config,
         )
         return
@@ -1128,6 +1223,7 @@ def commit(
         model=model,
         yes=yes,
         context=context,
+        provider_config=provider_config,
         http_client_config=http_client_config,
     )
 

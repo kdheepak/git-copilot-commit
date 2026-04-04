@@ -4,10 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
-import pytest  # noqa: F401
+import pytest
 from rich.console import Console
 
-from git_copilot_commit import github_copilot
+from git_copilot_commit.llms import copilot
+from git_copilot_commit.llms import core as llm
 
 
 def make_model(
@@ -17,8 +18,8 @@ def make_model(
     family: str | None = None,
     context_window_tokens: int | None = None,
     endpoints: tuple[str, ...] = (),
-) -> github_copilot.CopilotModel:
-    return github_copilot.CopilotModel(
+) -> llm.Model:
+    return llm.Model(
         id=model_id,
         name=model_id,
         vendor=vendor,
@@ -29,14 +30,14 @@ def make_model(
 
 
 def test_normalize_domain_and_url_helpers() -> None:
-    assert github_copilot.normalize_domain(" HTTPS://GHE.Example.COM/path ") == (
+    assert copilot.normalize_domain(" HTTPS://GHE.Example.COM/path ") == (
         "ghe.example.com"
     )
-    assert github_copilot.normalize_domain("not-a-host") is None
-    assert github_copilot.normalize_domain("bad host.example.com") is None
-    assert github_copilot.normalize_domain(None) is None
+    assert copilot.normalize_domain("not-a-host") is None
+    assert copilot.normalize_domain("bad host.example.com") is None
+    assert copilot.normalize_domain(None) is None
 
-    urls = github_copilot.get_urls("github.example.com")
+    urls = copilot.get_urls("github.example.com")
     assert urls["device_code_url"] == "https://github.example.com/login/device/code"
     assert urls["access_token_url"] == (
         "https://github.example.com/login/oauth/access_token"
@@ -45,37 +46,34 @@ def test_normalize_domain_and_url_helpers() -> None:
         "https://api.github.example.com/copilot_internal/v2/token"
     )
 
-    assert github_copilot.get_github_api_base_url("github.com") == (
-        "https://api.github.com"
-    )
-    assert github_copilot.get_github_api_base_url("github.example.com") == (
+    assert copilot.get_github_api_base_url("github.com") == "https://api.github.com"
+    assert copilot.get_github_api_base_url("github.example.com") == (
         "https://api.github.example.com"
     )
-    assert github_copilot.get_base_url_from_token(
-        "token;proxy-ep=proxy.example.com"
-    ) == ("https://api.example.com")
-    assert github_copilot.get_base_url_from_token("token-without-proxy-host") is None
+    assert copilot.get_base_url_from_token("token;proxy-ep=proxy.example.com") == (
+        "https://api.example.com"
+    )
+    assert copilot.get_base_url_from_token("token-without-proxy-host") is None
     assert (
-        github_copilot.get_github_copilot_base_url(
-            "token;proxy-ep=proxy.enterprise.example.com"
-        )
+        copilot.get_copilot_base_url("token;proxy-ep=proxy.enterprise.example.com")
         == "https://api.enterprise.example.com"
     )
     assert (
-        github_copilot.get_github_copilot_base_url(None, "github.example.com")
+        copilot.get_copilot_base_url(None, "github.example.com")
         == "https://copilot-api.github.example.com"
     )
-    assert github_copilot.get_github_copilot_base_url() == (
-        "https://api.individual.githubcopilot.com"
+    assert (
+        copilot.get_copilot_base_url()
+        == "https://api.individual.githubcopilot.com"
     )
 
 
 def test_credentials_path_uses_platformdirs_state_dir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     state_dir = tmp_path / "state"
     monkeypatch.setattr(
-        github_copilot,
+        copilot,
         "Settings",
         lambda: SimpleNamespace(
             state_dir=state_dir,
@@ -83,23 +81,23 @@ def test_credentials_path_uses_platformdirs_state_dir(
         ),
     )
 
-    assert github_copilot.credentials_path() == state_dir / "copilot-auth.json"
+    assert copilot.credentials_path() == state_dir / "copilot-auth.json"
 
 
 def test_save_and_load_credentials_round_trip(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     path = tmp_path / "state" / "copilot-auth.json"
-    monkeypatch.setattr(github_copilot, "credentials_path", lambda: path)
-    credentials = github_copilot.CopilotCredentials(
+    monkeypatch.setattr(copilot, "credentials_path", lambda: path)
+    credentials = copilot.CopilotCredentials(
         github_access_token="ghu_123",
         copilot_token="copilot-token",
         copilot_expires_at=2_000_000_000,
         enterprise_domain="github.example.com",
     )
 
-    saved_path = github_copilot.save_credentials(credentials)
-    loaded = github_copilot.load_credentials()
+    saved_path = copilot.save_credentials(credentials)
+    loaded = copilot.load_credentials()
 
     assert saved_path == path
     assert loaded == credentials
@@ -107,9 +105,9 @@ def test_save_and_load_credentials_round_trip(
 
 
 def test_credentials_and_payload_parsers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(github_copilot.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(copilot.time, "time", lambda: 1000.0)
 
-    credentials = github_copilot.CopilotCredentials.from_dict(
+    credentials = copilot.CopilotCredentials.from_dict(
         {
             "github_access_token": "ghu_123",
             "copilot_token": "token;proxy-ep=proxy.example.com",
@@ -121,7 +119,7 @@ def test_credentials_and_payload_parsers(monkeypatch: pytest.MonkeyPatch) -> Non
     assert not credentials.is_expired()
     assert credentials.base_url() == "https://api.example.com"
 
-    expired = github_copilot.CopilotCredentials.from_dict(
+    expired = copilot.CopilotCredentials.from_dict(
         {
             "github_access_token": "ghu_123",
             "copilot_token": "plain-token",
@@ -130,10 +128,10 @@ def test_credentials_and_payload_parsers(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     assert expired.is_expired()
 
-    with pytest.raises(github_copilot.CopilotError):
-        github_copilot.CopilotCredentials.from_dict({"github_access_token": ""})
+    with pytest.raises(llm.LLMError):
+        copilot.CopilotCredentials.from_dict({"github_access_token": ""})
 
-    model = github_copilot.CopilotModel.from_payload(
+    model = llm.Model.from_payload(
         {
             "id": "gpt-5.4",
             "name": "GPT-5.4",
@@ -149,10 +147,10 @@ def test_credentials_and_payload_parsers(monkeypatch: pytest.MonkeyPatch) -> Non
     assert model.max_context_window_tokens == 272000
     assert model.supported_endpoints == ("/responses",)
 
-    with pytest.raises(github_copilot.CopilotError):
-        github_copilot.CopilotModel.from_payload({"name": "Missing id"})
+    with pytest.raises(llm.LLMError):
+        llm.Model.from_payload({"name": "Missing id"})
 
-    viewer = github_copilot.GitHubViewer.from_payload(
+    viewer = copilot.GitHubViewer.from_payload(
         {
             "login": "kd",
             "name": "KD",
@@ -164,54 +162,46 @@ def test_credentials_and_payload_parsers(monkeypatch: pytest.MonkeyPatch) -> Non
     assert viewer.login == "kd"
     assert viewer.plan_name == "Pro"
 
-    with pytest.raises(github_copilot.CopilotError):
-        github_copilot.GitHubViewer.from_payload({})
+    with pytest.raises(llm.LLMError):
+        copilot.GitHubViewer.from_payload({})
 
 
-def test_pick_model_covers_requested_defaults_and_fallbacks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_pick_model_covers_requested_defaults_and_fallbacks() -> None:
     models = [
         make_model("custom-model", vendor="openai"),
         make_model("gpt-4.1", vendor="openai"),
         make_model("claude-sonnet-4.6", vendor="anthropic"),
     ]
 
-    assert github_copilot.pick_model(models, "claude-sonnet-4.6").id == (
-        "claude-sonnet-4.6"
-    )
+    assert llm.pick_model(models, "claude-sonnet-4.6").id == "claude-sonnet-4.6"
 
-    with pytest.raises(github_copilot.ModelSelectionError) as requested_error:
-        github_copilot.pick_model(models, "missing-model")
+    with pytest.raises(llm.ModelSelectionError) as requested_error:
+        llm.pick_model(models, "missing-model")
     assert requested_error.value.requested_model == "missing-model"
 
-    monkeypatch.setattr(
-        github_copilot,
-        "load_config",
-        lambda: github_copilot.CopilotConfig(default_model="custom-model"),
+    assert (
+        llm.pick_model(
+            models,
+            default_model="custom-model",
+            provider_label="GitHub Copilot",
+        ).id
+        == "custom-model"
     )
-    assert github_copilot.pick_model(models).id == "custom-model"
 
-    monkeypatch.setattr(
-        github_copilot,
-        "load_config",
-        lambda: github_copilot.CopilotConfig(default_model="missing-config-model"),
-    )
-    monkeypatch.setattr(github_copilot, "config_path", lambda: Path("/tmp/config.json"))
-    with pytest.raises(github_copilot.ModelSelectionError) as config_error:
-        github_copilot.pick_model(models)
+    with pytest.raises(llm.ModelSelectionError) as config_error:
+        llm.pick_model(
+            models,
+            default_model="missing-config-model",
+            provider_label="GitHub Copilot",
+            configured_default_model_path=Path("/tmp/config.json"),
+        )
     assert config_error.value.configured_default_model == "missing-config-model"
     assert config_error.value.configured_default_model_path == Path("/tmp/config.json")
 
-    monkeypatch.setattr(
-        github_copilot,
-        "load_config",
-        lambda: github_copilot.CopilotConfig(default_model=None),
+    assert llm.pick_model(models).id == "claude-sonnet-4.6"
+    assert llm.pick_model([make_model("z-model"), make_model("a-model")]).id == (
+        "z-model"
     )
-    assert github_copilot.pick_model(models).id == "claude-sonnet-4.6"
-    assert github_copilot.pick_model(
-        [make_model("z-model"), make_model("a-model")]
-    ).id == ("z-model")
 
 
 def test_infer_api_surface_and_vendor_filtering() -> None:
@@ -233,61 +223,59 @@ def test_infer_api_surface_and_vendor_filtering() -> None:
     )
     google_model = make_model("gemini-2.5-pro", vendor="google")
 
-    assert github_copilot.infer_api_surface(gpt5_model) == "responses"
-    assert github_copilot.infer_api_surface(chat_model) == "chat_completions"
-    assert github_copilot.infer_api_surface(anthropic_model) == "anthropic_messages"
-    assert github_copilot.infer_api_surface(google_model) == "chat_completions"
-    assert github_copilot.format_supported_endpoints(chat_model) == "/chat/completions"
-    assert github_copilot.format_supported_endpoints(google_model) == "default"
-    assert github_copilot.format_context_window(gpt5_model) == "?"
+    assert llm.infer_api_surface(gpt5_model) == "responses"
+    assert llm.infer_api_surface(chat_model) == "chat_completions"
+    assert llm.infer_api_surface(anthropic_model) == "anthropic_messages"
+    assert llm.infer_api_surface(google_model) == "chat_completions"
+    assert llm.format_supported_endpoints(chat_model) == "/chat/completions"
+    assert llm.format_supported_endpoints(google_model) == "default"
+    assert llm.format_context_window(gpt5_model) == "?"
 
-    assert github_copilot.normalize_vendor_filter(" Gemini ") == "google"
-    assert github_copilot.normalize_vendor_filter("claude") == "anthropic"
-    assert github_copilot.normalize_vendor_filter("") is None
+    assert llm.normalize_vendor_filter(" Gemini ") == "google"
+    assert llm.normalize_vendor_filter("claude") == "anthropic"
+    assert llm.normalize_vendor_filter("") is None
 
     models = [gpt5_model, anthropic_model, google_model]
-    assert github_copilot.filter_models_by_vendor(models, None) == models
-    assert github_copilot.filter_models_by_vendor(models, "gemini") == [google_model]
+    assert llm.filter_models_by_vendor(models, None) == models
+    assert llm.filter_models_by_vendor(models, "gemini") == [google_model]
 
-    with pytest.raises(github_copilot.CopilotError) as vendor_error:
-        github_copilot.filter_models_by_vendor(models, "mistral")
+    with pytest.raises(llm.LLMError) as vendor_error:
+        llm.filter_models_by_vendor(models, "mistral")
     assert "anthropic, google, openai" in str(vendor_error.value)
 
 
-def test_reauthentication_and_json_cache_helpers(tmp_path) -> None:
-    assert github_copilot.should_reauthenticate(
-        github_copilot.CopilotHttpError(401, "Unauthorized")
+def test_reauthentication_and_json_cache_helpers(tmp_path: Path) -> None:
+    assert copilot.should_reauthenticate(llm.LLMHttpError(401, "Unauthorized"))
+    assert not copilot.should_reauthenticate(
+        llm.LLMHttpError(500, "Internal Server Error")
     )
-    assert not github_copilot.should_reauthenticate(
-        github_copilot.CopilotHttpError(500, "Internal Server Error")
-    )
-    assert github_copilot.should_reauthenticate(
-        github_copilot.CopilotError("No cached Copilot credentials found.")
+    assert copilot.should_reauthenticate(
+        llm.LLMError("No cached Copilot credentials found.")
     )
 
-    assert github_copilot.read_json_object(tmp_path / "missing.json") is None
+    assert copilot.read_json_object(tmp_path / "missing.json") is None
 
     bad_json = tmp_path / "bad.json"
     bad_json.write_text("{bad", encoding="utf-8")
-    with pytest.raises(github_copilot.CopilotError):
-        github_copilot.read_json_object(bad_json)
+    with pytest.raises(llm.LLMError):
+        copilot.read_json_object(bad_json)
 
     wrong_type = tmp_path / "list.json"
     wrong_type.write_text("[]", encoding="utf-8")
-    with pytest.raises(github_copilot.CopilotError):
-        github_copilot.read_json_object(wrong_type)
+    with pytest.raises(llm.LLMError):
+        copilot.read_json_object(wrong_type)
 
 
 def test_extract_completion_text_handles_supported_shapes() -> None:
     assert (
-        github_copilot.extract_completion_text(
+        llm.extract_completion_text(
             {"choices": [{"message": {"content": "  feat: add support  "}}]}
         )
         == "feat: add support"
     )
 
     assert (
-        github_copilot.extract_completion_text(
+        llm.extract_completion_text(
             {
                 "choices": [
                     {
@@ -305,18 +293,16 @@ def test_extract_completion_text_handles_supported_shapes() -> None:
         == "feat: first line\nsecond line"
     )
 
-    with pytest.raises(github_copilot.CopilotError):
-        github_copilot.extract_completion_text(
-            {"choices": [{"message": {"content": []}}]}
-        )
+    with pytest.raises(llm.LLMError):
+        llm.extract_completion_text({"choices": [{"message": {"content": []}}]})
 
 
 def test_extract_response_text_handles_text_refusals_and_errors() -> None:
-    assert github_copilot.extract_response_text(
-        {"output_text": "  feat: add support  "}
-    ) == ("feat: add support")
+    assert llm.extract_response_text({"output_text": "  feat: add support  "}) == (
+        "feat: add support"
+    )
     assert (
-        github_copilot.extract_response_text(
+        llm.extract_response_text(
             {
                 "output": [
                     {
@@ -331,14 +317,14 @@ def test_extract_response_text_handles_text_refusals_and_errors() -> None:
         == "feat: first line\nsecond line"
     )
     assert (
-        github_copilot.extract_response_text(
+        llm.extract_response_text(
             {"output": [{"content": [{"refusal": "Refused for safety"}]}]}
         )
         == "Refused for safety"
     )
 
-    with pytest.raises(github_copilot.CopilotError):
-        github_copilot.extract_response_text({"output": []})
+    with pytest.raises(llm.LLMError):
+        llm.extract_response_text({"output": []})
 
 
 def test_request_json_retries_rate_limits_and_honors_retry_after(
@@ -347,7 +333,7 @@ def test_request_json_retries_rate_limits_and_honors_retry_after(
     attempts = 0
     sleep_calls: list[float] = []
 
-    monkeypatch.setattr(github_copilot.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(llm.time, "sleep", sleep_calls.append)
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
@@ -367,7 +353,7 @@ def test_request_json_retries_rate_limits_and_honors_retry_after(
         )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        payload = github_copilot.request_json(
+        payload = llm.request_json(
             client,
             "GET",
             "https://example.com/models",
@@ -384,8 +370,8 @@ def test_request_json_retries_transient_transport_errors(
     attempts = 0
     sleep_calls: list[float] = []
 
-    monkeypatch.setattr(github_copilot.time, "sleep", sleep_calls.append)
-    monkeypatch.setattr(github_copilot.random, "uniform", lambda _a, _b: 0.0)
+    monkeypatch.setattr(llm.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(llm.random, "uniform", lambda _a, _b: 0.0)
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
@@ -400,7 +386,7 @@ def test_request_json_retries_transient_transport_errors(
         )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        payload = github_copilot.request_json(
+        payload = llm.request_json(
             client,
             "GET",
             "https://example.com/models",
@@ -408,19 +394,19 @@ def test_request_json_retries_transient_transport_errors(
 
     assert payload == {"ok": True}
     assert attempts == 2
-    assert sleep_calls == [github_copilot.HTTP_RETRY_BASE_DELAY_SECONDS]
+    assert sleep_calls == [llm.HTTP_RETRY_BASE_DELAY_SECONDS]
 
 
-def test_responses_completion_retries_retryable_http_errors(
+def test_complete_text_prompt_retries_retryable_http_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attempts = 0
     sleep_calls: list[float] = []
 
-    monkeypatch.setattr(github_copilot.time, "sleep", sleep_calls.append)
-    monkeypatch.setattr(github_copilot.random, "uniform", lambda _a, _b: 0.0)
+    monkeypatch.setattr(llm.time, "sleep", sleep_calls.append)
+    monkeypatch.setattr(llm.random, "uniform", lambda _a, _b: 0.0)
 
-    credentials = github_copilot.CopilotCredentials(
+    credentials = copilot.CopilotCredentials(
         github_access_token="ghu_123",
         copilot_token="copilot-token",
         copilot_expires_at=2_000_000_000,
@@ -451,7 +437,7 @@ def test_responses_completion_retries_retryable_http_errors(
         )
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        completion = github_copilot.responses_completion(
+        completion = copilot.complete_text_prompt(
             client,
             credentials,
             model=model,
@@ -460,13 +446,13 @@ def test_responses_completion_retries_retryable_http_errors(
 
     assert completion == "feat: add retries"
     assert attempts == 2
-    assert sleep_calls == [github_copilot.HTTP_RETRY_BASE_DELAY_SECONDS]
+    assert sleep_calls == [llm.HTTP_RETRY_BASE_DELAY_SECONDS]
 
 
 def test_render_model_selection_error_and_time_formatting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    error = github_copilot.ModelSelectionError(
+    error = llm.ModelSelectionError(
         models=[
             make_model("gpt-5.4", vendor="openai"),
             make_model("claude-sonnet-4.6", vendor="anthropic"),
@@ -476,7 +462,7 @@ def test_render_model_selection_error_and_time_formatting(
     )
     console = Console(record=True, width=120)
 
-    console.print(github_copilot.render_model_selection_error(error))
+    console.print(llm.render_model_selection_error(error))
     rendered = console.export_text()
 
     assert "Model Selection Error" in rendered
@@ -485,20 +471,20 @@ def test_render_model_selection_error_and_time_formatting(
     assert "Available Model IDs" in rendered
     assert "gpt-5.4" in rendered
 
-    monkeypatch.setattr(github_copilot.time, "time", lambda: 1_700_000_000.0)
-    assert github_copilot.format_relative_duration(3661) == "in 1h 1m"
-    assert github_copilot.format_relative_duration(-59) == "59s ago"
-    assert github_copilot.format_unix_timestamp(1_700_000_061).endswith("(in 1m 1s)")
-    assert github_copilot.format_unix_timestamp(10**20) == str(10**20)
+    monkeypatch.setattr(llm.time, "time", lambda: 1_700_000_000.0)
+    assert llm.format_relative_duration(3661) == "in 1h 1m"
+    assert llm.format_relative_duration(-59) == "59s ago"
+    assert llm.format_unix_timestamp(1_700_000_061).endswith("(in 1m 1s)")
+    assert llm.format_unix_timestamp(10**20) == str(10**20)
 
 
 def test_print_model_table_shows_context_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     table_console = Console(record=True, width=140)
-    monkeypatch.setattr(github_copilot, "console", table_console)
+    monkeypatch.setattr(llm, "console", table_console)
 
-    github_copilot.print_model_table(
+    llm.print_model_table(
         [
             make_model(
                 "gpt-5.4",
