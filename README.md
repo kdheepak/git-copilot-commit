@@ -37,7 +37,7 @@ You can run the latest version of tool directly every time by invoking this one 
 uvx git-copilot-commit --help
 ```
 
-Alternatively, you can install the tool once into a global isolated environment 
+Alternatively, you can install the tool once into a global isolated environment
 and run `git-copilot-commit` to invoke it:
 
 ```bash
@@ -231,5 +231,5 @@ git ai-commit --provider openai --model your-model-id
 > git config --global diff.context 3
 > ```
 >
-> This may be useful because this tool sends the diffs with surrounding context 
+> This may be useful because this tool sends the diffs with surrounding context
 > to the LLM for generating a commit message

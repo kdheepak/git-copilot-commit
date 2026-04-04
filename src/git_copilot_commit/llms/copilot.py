@@ -411,7 +411,9 @@ def fetch_github_viewer(
 def ensure_fresh_credentials(client) -> CopilotCredentials:
     credentials = load_credentials()
     if credentials is None:
-        raise LLMError(f"No cached Copilot credentials found. Run `{CLI_AUTH_COMMAND}` first.")
+        raise LLMError(
+            f"No cached Copilot credentials found. Run `{CLI_AUTH_COMMAND}` first."
+        )
 
     if not credentials.is_expired():
         return credentials
@@ -497,13 +499,17 @@ def list_models(client, credentials: CopilotCredentials) -> list[Model]:
     return models
 
 
-def complete_text_prompt(client, credentials: CopilotCredentials, *, model: Model, prompt: str) -> str:
+def complete_text_prompt(
+    client, credentials: CopilotCredentials, *, model: Model, prompt: str
+) -> str:
     api_surface = llm.infer_api_surface(model)
     if api_surface == "chat_completions":
         return llm.chat_completion_request(
             client,
             f"{credentials.base_url()}/chat/completions",
-            copilot_request_headers(credentials.copilot_token, intent="conversation-edits"),
+            copilot_request_headers(
+                credentials.copilot_token, intent="conversation-edits"
+            ),
             model_id=model.id,
             prompt=prompt,
         )
@@ -632,7 +638,11 @@ def show_login_summary(
     configured_default_model_path: Path | None = None,
     http_client_config: HttpClientConfig | None = None,
 ) -> None:
-    def run(client) -> tuple[str, CopilotCredentials, GitHubViewer | None, list[Model] | None, list[str]]:
+    def run(
+        client,
+    ) -> tuple[
+        str, CopilotCredentials, GitHubViewer | None, list[Model] | None, list[str]
+    ]:
         credentials = ensure_fresh_credentials(client)
         domain, github_viewer, available_models, warnings = collect_login_summary(
             client,
@@ -640,9 +650,11 @@ def show_login_summary(
         )
         return domain, credentials, github_viewer, available_models, warnings
 
-    domain, credentials, github_viewer, available_models, warnings = _with_reauthentication(
-        run,
-        http_client_config=http_client_config,
+    domain, credentials, github_viewer, available_models, warnings = (
+        _with_reauthentication(
+            run,
+            http_client_config=http_client_config,
+        )
     )
 
     print_login_summary(
@@ -701,7 +713,9 @@ def login(
             device.interval,
             device.expires_in,
         )
-        credentials = refresh_copilot_token(client, github_access_token, normalized_domain)
+        credentials = refresh_copilot_token(
+            client, github_access_token, normalized_domain
+        )
         path = save_credentials(credentials)
         domain, github_viewer, available_models, warnings = collect_login_summary(
             client,

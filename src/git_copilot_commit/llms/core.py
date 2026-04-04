@@ -68,9 +68,7 @@ class ModelSelectionError(LLMError):
         self.configured_default_model_path = configured_default_model_path
 
         if requested_model is not None:
-            message = (
-                f"Model `{requested_model}` was not returned by {provider_label}."
-            )
+            message = f"Model `{requested_model}` was not returned by {provider_label}."
         else:
             location = (
                 f" from {configured_default_model_path}"
@@ -179,7 +177,9 @@ def _maybe_enable_native_tls(native_tls: bool) -> None:
     _NATIVE_TLS_ENABLED = True
 
 
-def make_http_client(http_client_config: HttpClientConfig | None = None) -> httpx.Client:
+def make_http_client(
+    http_client_config: HttpClientConfig | None = None,
+) -> httpx.Client:
     config = http_client_config or HttpClientConfig()
     _maybe_enable_native_tls(config.use_native_tls)
 
@@ -643,7 +643,11 @@ def responses_completion_request(
                             message = error.get("message")
                             code = error.get("code")
                             if isinstance(message, str) and message.strip():
-                                prefix = f"{code}: " if isinstance(code, str) and code else ""
+                                prefix = (
+                                    f"{code}: "
+                                    if isinstance(code, str) and code
+                                    else ""
+                                )
                                 raise LLMError(
                                     f"Responses stream error: {prefix}{message.strip()}"
                                 )

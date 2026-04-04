@@ -124,9 +124,7 @@ def test_ask_openai_provider_uses_chat_completions(
                 200,
                 headers={"content-type": "application/json"},
                 json={
-                    "choices": [
-                        {"message": {"content": "feat: add local llm support"}}
-                    ]
+                    "choices": [{"message": {"content": "feat: add local llm support"}}]
                 },
                 request=request,
             )
@@ -163,7 +161,9 @@ def test_ensure_model_ready_uses_configured_default_without_model_lookup(
         openai_api.llm,
         "make_http_client",
         lambda _config=None: (_ for _ in ()).throw(
-            AssertionError("Model discovery should not run when a default model is set.")
+            AssertionError(
+                "Model discovery should not run when a default model is set."
+            )
         ),
     )
 

@@ -104,13 +104,17 @@ def _read_config_string(
         return None
 
     if not isinstance(value, str):
-        raise llm.LLMError(f"Configured {label} in {Settings().config_file} is invalid.")
+        raise llm.LLMError(
+            f"Configured {label} in {Settings().config_file} is invalid."
+        )
 
     trimmed = value.strip()
     if not trimmed:
         if allow_blank:
             return None
-        raise llm.LLMError(f"Configured {label} in {Settings().config_file} is invalid.")
+        raise llm.LLMError(
+            f"Configured {label} in {Settings().config_file} is invalid."
+        )
 
     return trimmed
 
@@ -136,7 +140,9 @@ def load_default_model(
     return value.strip(), settings.config_file
 
 
-def _load_provider_defaults_from_settings(settings: Settings | None = None) -> ProviderConfig | None:
+def _load_provider_defaults_from_settings(
+    settings: Settings | None = None,
+) -> ProviderConfig | None:
     settings = settings or Settings()
     raw_provider = settings.get("provider")
     raw_base_url = settings.get("base_url")
@@ -171,7 +177,9 @@ def _load_provider_defaults_from_settings(settings: Settings | None = None) -> P
     if provider is None and base_url is None and api_key is None:
         return None
 
-    return ProviderConfig(provider=provider or "copilot", base_url=base_url, api_key=api_key)
+    return ProviderConfig(
+        provider=provider or "copilot", base_url=base_url, api_key=api_key
+    )
 
 
 def resolve_provider_config(
@@ -198,7 +206,11 @@ def resolve_provider_config(
 
     resolved_provider = cli_provider or env_provider or config_provider
     if resolved_provider is None:
-        if cli_base_url is not None or env_base_url is not None or config_base_url is not None:
+        if (
+            cli_base_url is not None
+            or env_base_url is not None
+            or config_base_url is not None
+        ):
             resolved_provider = "openai"
         else:
             resolved_provider = "copilot"

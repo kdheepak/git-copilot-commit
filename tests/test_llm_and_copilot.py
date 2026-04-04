@@ -62,10 +62,7 @@ def test_normalize_domain_and_url_helpers() -> None:
         copilot.get_copilot_base_url(None, "github.example.com")
         == "https://copilot-api.github.example.com"
     )
-    assert (
-        copilot.get_copilot_base_url()
-        == "https://api.individual.githubcopilot.com"
-    )
+    assert copilot.get_copilot_base_url() == "https://api.individual.githubcopilot.com"
 
 
 def test_credentials_path_uses_platformdirs_state_dir(
