@@ -316,6 +316,7 @@ def ask(
     provider_config: ProviderConfig | None = None,
     model: str | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = False,
 ) -> str:
     resolved_provider = provider_config or resolve_provider_config()
     default_model, config_file = load_default_model()
@@ -327,6 +328,7 @@ def ask(
             default_model=default_model,
             configured_default_model_path=config_file,
             http_client_config=http_client_config,
+            disable_thinking=disable_thinking,
         )
 
     if resolved_provider.base_url is None:
@@ -341,6 +343,7 @@ def ask(
         configured_default_model_path=config_file,
         provider_label=resolved_provider.display_name,
         http_client_config=http_client_config,
+        disable_thinking=disable_thinking,
     )
 
 
