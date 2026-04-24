@@ -82,7 +82,11 @@ git-copilot-commit --help
 
 ### OpenAI-compatible provider
 
-1. Point the CLI at your server:
+1. Point the CLI at your server.
+
+   The base URL can be either the provider root such as `http://127.0.0.1:11434/v1`
+   or the full chat completions endpoint such as
+   `http://127.0.0.1:11434/v1/chat/completions`.
 
    ```bash
    uvx git-copilot-commit models \
@@ -90,7 +94,7 @@ git-copilot-commit --help
      --base-url http://127.0.0.1:11434/v1
    ```
 
-2. Generate and commit:
+2. Generate and commit.
 
    ```bash
    uvx git-copilot-commit commit \
@@ -100,6 +104,17 @@ git-copilot-commit --help
    ```
 
    If your server requires an API key, also pass `--api-key ...` or set `OPENAI_API_KEY`.
+
+3. Example: use a self-hosted GPT-OSS model:
+
+   ```bash
+   uvx git-copilot-commit commit \
+     --provider openai \
+     --base-url http://example.com:8001/v1/chat/completions \
+     --model openai/gpt-oss-120b
+   ```
+
+   Model ids with slashes such as `openai/gpt-oss-120b` are supported.
 
 ## Usage
 
@@ -161,6 +176,15 @@ uvx git-copilot-commit commit \
   --model your-model-id
 ```
 
+Use a self-hosted GPT-OSS endpoint:
+
+```bash
+uvx git-copilot-commit commit \
+  --provider openai \
+  --base-url http://example.com:8001/v1/chat/completions \
+  --model openai/gpt-oss-120b
+```
+
 Split staged hunks into separate commits:
 
 ```bash
@@ -218,9 +242,19 @@ git ai-commit --all --yes --model claude-3.5-sonnet
 You can also set provider defaults with environment variables:
 
 ```bash
-export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+export GIT_COPILOT_COMMIT_PROVIDER=openai
+export GIT_COPILOT_COMMIT_BASE_URL=http://127.0.0.1:11434/v1
+export GIT_COPILOT_COMMIT_API_KEY=...
 export OPENAI_API_KEY=...
 git ai-commit --provider openai --model your-model-id
+```
+
+For example:
+
+```bash
+export GIT_COPILOT_COMMIT_PROVIDER=openai
+export GIT_COPILOT_COMMIT_BASE_URL=http://example.com:8001/v1
+git ai-commit --model openai/gpt-oss-120b
 ```
 
 > [!TIP]
