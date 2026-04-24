@@ -90,10 +90,14 @@ def test_get_available_models_for_openai_provider(
             request=request,
         )
 
+    def make_http_client(config: object | None = None) -> httpx.Client:
+        del config
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
     monkeypatch.setattr(
         openai_api.llm,
         "make_http_client",
-        lambda _config=None: httpx.Client(transport=httpx.MockTransport(handler)),
+        make_http_client,
     )
 
     inventory = providers.get_available_models(
@@ -120,6 +124,8 @@ def test_ask_openai_provider_uses_chat_completions(
             request_payload = json.loads(request.content.decode("utf-8"))
             assert request_payload["model"] == "openai/gpt-oss-120b"
             assert request_payload["messages"][0]["content"] == "Write a commit message"
+            assert "reasoning_effort" not in request_payload
+            assert "chat_template_kwargs" not in request_payload
             return httpx.Response(
                 200,
                 headers={"content-type": "application/json"},
@@ -131,10 +137,14 @@ def test_ask_openai_provider_uses_chat_completions(
 
         raise AssertionError(f"Unexpected request path: {request.url.path}")
 
+    def make_http_client(config: object | None = None) -> httpx.Client:
+        del config
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
     monkeypatch.setattr(
         openai_api.llm,
         "make_http_client",
-        lambda _config=None: httpx.Client(transport=httpx.MockTransport(handler)),
+        make_http_client,
     )
 
     response = providers.ask(
@@ -149,6 +159,52 @@ def test_ask_openai_provider_uses_chat_completions(
     assert response == "feat: add local llm support"
 
 
+def test_ask_openai_provider_can_disable_thinking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(providers, "Settings", lambda: FakeSettings())
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            request_payload = json.loads(request.content.decode("utf-8"))
+            assert request_payload["model"] == "Qwen/Qwen3.6-35B-A3B"
+            assert request_payload["reasoning_effort"] == "none"
+            assert request_payload["chat_template_kwargs"] == {
+                "enable_thinking": False,
+                "thinking": False,
+            }
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/json"},
+                json={"choices": [{"message": {"content": "feat: disable thinking"}}]},
+                request=request,
+            )
+
+        raise AssertionError(f"Unexpected request path: {request.url.path}")
+
+    def make_http_client(config: object | None = None) -> httpx.Client:
+        del config
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(
+        openai_api.llm,
+        "make_http_client",
+        make_http_client,
+    )
+
+    response = providers.ask(
+        "Write a commit message",
+        provider_config=providers.ProviderConfig(
+            provider="openai",
+            base_url="http://127.0.0.1:11434/v1",
+        ),
+        model="Qwen/Qwen3.6-35B-A3B",
+        disable_thinking=True,
+    )
+
+    assert response == "feat: disable thinking"
+
+
 def test_ensure_model_ready_uses_configured_default_without_model_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -157,14 +213,17 @@ def test_ensure_model_ready_uses_configured_default_without_model_lookup(
         "load_default_model",
         lambda: ("fallback-model", Path("/tmp/config.json")),
     )
+
+    def fail_if_model_discovery_runs(config: object | None = None) -> None:
+        del config
+        raise AssertionError(
+            "Model discovery should not run when a default model is set."
+        )
+
     monkeypatch.setattr(
         openai_api.llm,
         "make_http_client",
-        lambda _config=None: (_ for _ in ()).throw(
-            AssertionError(
-                "Model discovery should not run when a default model is set."
-            )
-        ),
+        fail_if_model_discovery_runs,
     )
 
     model = providers.ensure_model_ready(
