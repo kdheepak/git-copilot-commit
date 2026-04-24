@@ -4,7 +4,8 @@
 [![PyPI](https://img.shields.io/pypi/v/git-copilot-commit)](https://pypi.org/project/git-copilot-commit/)
 [![License](https://img.shields.io/github/license/kdheepak/git-copilot-commit)](https://github.com/kdheepak/git-copilot-commit/blob/main/LICENSE)
 
-AI-powered Git commit assistant that generates conventional commit messages using GitHub Copilot or any OpenAI-compatible LLM.
+AI-powered Git commit assistant that generates conventional commit messages using GitHub Copilot or
+any OpenAI-compatible LLM.
 
 ![Screenshot of git-copilot-commit in action](https://github.com/user-attachments/assets/6a6d70a6-6060-44e6-8cf4-a6532e9e9142)
 
@@ -37,8 +38,8 @@ You can run the latest version of tool directly every time by invoking this one 
 uvx git-copilot-commit --help
 ```
 
-Alternatively, you can install the tool once into a global isolated environment
-and run `git-copilot-commit` to invoke it:
+Alternatively, you can install the tool once into a global isolated environment and run
+`git-copilot-commit` to invoke it:
 
 ```bash
 # Install into global isolated environment
@@ -84,10 +85,6 @@ git-copilot-commit --help
 
 1. Point the CLI at your server.
 
-   The base URL can be either the provider root such as `http://127.0.0.1:11434/v1`
-   or the full chat completions endpoint such as
-   `http://127.0.0.1:11434/v1/chat/completions`.
-
    ```bash
    uvx git-copilot-commit models \
      --provider openai \
@@ -113,8 +110,6 @@ git-copilot-commit --help
      --base-url http://example.com:8001/v1/chat/completions \
      --model openai/gpt-oss-120b
    ```
-
-   Model ids with slashes such as `openai/gpt-oss-120b` are supported.
 
 ## Usage
 
@@ -232,8 +227,8 @@ Now you can run to review the message before committing:
 git ai-commit
 ```
 
-Alternatively, you can stage all files and auto accept the commit message and
-specify which model should be used to generate the commit in one CLI invocation.
+Alternatively, you can stage all files and auto accept the commit message and specify which model
+should be used to generate the commit in one CLI invocation.
 
 ```bash
 git ai-commit --all --yes --model claude-3.5-sonnet
@@ -265,5 +260,5 @@ git ai-commit --model openai/gpt-oss-120b
 > git config --global diff.context 3
 > ```
 >
-> This may be useful because this tool sends the diffs with surrounding context
-> to the LLM for generating a commit message
+> This may be useful because this tool sends the diffs with surrounding context to the LLM for
+> generating a commit message
