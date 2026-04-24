@@ -500,7 +500,12 @@ def list_models(client, credentials: CopilotCredentials) -> list[Model]:
 
 
 def complete_text_prompt(
-    client, credentials: CopilotCredentials, *, model: Model, prompt: str
+    client,
+    credentials: CopilotCredentials,
+    *,
+    model: Model,
+    prompt: str,
+    disable_thinking: bool = False,
 ) -> str:
     api_surface = llm.infer_api_surface(model)
     if api_surface == "chat_completions":
@@ -512,6 +517,7 @@ def complete_text_prompt(
             ),
             model_id=model.id,
             prompt=prompt,
+            disable_thinking=disable_thinking,
         )
     if api_surface == "responses":
         return llm.responses_completion_request(
@@ -524,6 +530,7 @@ def complete_text_prompt(
             ),
             model_id=model.id,
             prompt=prompt,
+            disable_thinking=disable_thinking,
         )
 
     raise LLMError(
@@ -778,6 +785,7 @@ def ask(
     default_model: str | None = None,
     configured_default_model_path: Path | None = None,
     http_client_config: HttpClientConfig | None = None,
+    disable_thinking: bool = False,
 ) -> str:
     def run(client) -> str:
         credentials = ensure_fresh_credentials(client)
@@ -794,6 +802,7 @@ def ask(
             credentials,
             model=selected_model,
             prompt=prompt,
+            disable_thinking=disable_thinking,
         )
 
     return _with_reauthentication(run, http_client_config=http_client_config)
