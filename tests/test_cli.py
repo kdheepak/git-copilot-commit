@@ -1,9 +1,12 @@
+from dataclasses import dataclass
+import collections.abc
+import contextlib
+import io
 from unittest.mock import Mock
 from pathlib import Path
 
 import pytest  # noqa: F401
-import typer
-from typer.testing import CliRunner
+from rich.console import Console
 
 import git_copilot_commit.cli as cli
 from git_copilot_commit.llms import core as llm
@@ -37,6 +40,54 @@ from git_copilot_commit.split_commits import (
     SplitPlanCommit,
     extract_patch_units,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CliResult:
+    exit_code: int
+    stdout: str
+    exception: BaseException | None
+
+
+class CliRunner:
+    def invoke(
+        self,
+        app: collections.abc.Callable[..., object],
+        args: list[str],
+    ) -> CliResult:
+        stdout = io.StringIO()
+        console = Console(
+            file=stdout,
+            force_terminal=False,
+            color_system=None,
+            width=120,
+        )
+        exit_code = 0
+        exception: BaseException | None = None
+
+        with contextlib.redirect_stdout(stdout):
+            try:
+                app(
+                    args,
+                    console=console,
+                    error_console=console,
+                    result_action="return_value",
+                )
+            except SystemExit as exc:
+                exception = exc
+                if exc.code is None:
+                    exit_code = 0
+                elif isinstance(exc.code, int):
+                    exit_code = exc.code
+                else:
+                    exit_code = 1
+
+        return CliResult(
+            exit_code=exit_code,
+            stdout=stdout.getvalue(),
+            exception=exception,
+        )
+
 
 runner = CliRunner()
 
@@ -80,7 +131,7 @@ def test_build_commit_message_prompt_can_omit_diff() -> None:
 def test_build_commit_message_prompt_requires_staged_changes() -> None:
     status = make_status(staged_diff="   \n")
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         build_commit_message_prompt(status)
 
 
@@ -433,17 +484,18 @@ def test_preprocess_cli_args_rewrites_split_syntax() -> None:
 
 
 def test_run_uses_preprocessed_args(monkeypatch: pytest.MonkeyPatch) -> None:
-    command = Mock()
-    monkeypatch.setattr(cli, "get_command", Mock(return_value=command))
+    app = Mock()
+    monkeypatch.setattr(cli, "app", app)
 
     run(["commit", "--split=auto", "--yes"])
 
-    command.main.assert_called_once()
-    assert command.main.call_args.kwargs["args"] == [
-        "commit",
-        "--split",
-        "--yes",
-    ]
+    app.assert_called_once_with(
+        [
+            "commit",
+            "--split",
+            "--yes",
+        ]
+    )
 
 
 def test_load_named_prompt_prefers_first_existing_location(
@@ -456,7 +508,7 @@ def test_load_named_prompt_prefers_first_existing_location(
     monkeypatch.setattr(
         cli,
         "get_prompt_locations",
-        lambda _filename: [user_prompt, packaged_prompt],
+        Mock(return_value=[user_prompt, packaged_prompt]),
     )
 
     assert load_named_prompt("ignored.md") == "packaged prompt"
@@ -473,13 +525,15 @@ def test_load_named_prompt_and_resolve_prompt_file_error_paths(
     monkeypatch.setattr(
         cli,
         "get_prompt_locations",
-        lambda _filename: [
-            Path("/does/not/exist/one.md"),
-            Path("/does/not/exist/two.md"),
-        ],
+        Mock(
+            return_value=[
+                Path("/does/not/exist/one.md"),
+                Path("/does/not/exist/two.md"),
+            ]
+        ),
     )
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         load_named_prompt("missing.md")
 
     class BrokenSettings:
@@ -491,7 +545,7 @@ def test_load_named_prompt_and_resolve_prompt_file_error_paths(
 
     monkeypatch.setattr(cli, "Settings", BrokenSettings)
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         resolve_prompt_file()
 
     assert mock_print.call_count == 2
@@ -520,7 +574,7 @@ def test_load_system_prompt_and_resolve_prompt_file_success(
     assert load_system_prompt() == "system prompt"
 
     prompt_path.unlink()
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         load_system_prompt()
 
 
@@ -541,7 +595,7 @@ def test_commit_with_retry_no_verify_retries_and_can_abort(
     aborting_repo.commit.side_effect = cli.GitError("pre-commit hook failed")
     monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=False))
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(SystemExit):
         commit_with_retry_no_verify(aborting_repo, "feat: abort retry")
 
 
@@ -607,20 +661,22 @@ def test_commit_command_from_subdirectory_stages_the_entire_repository(
 
     monkeypatch.chdir(frontend_dir)
     monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
-    monkeypatch.setattr(cli, "ensure_copilot_authentication", lambda _config: None)
+    monkeypatch.setattr(cli, "ensure_copilot_authentication", Mock(return_value=None))
     monkeypatch.setattr(
         cli.providers,
         "ensure_model_ready",
-        lambda **_kwargs: llm.Model(
-            id="gpt-5.4",
-            name="GPT-5.4",
-            vendor="openai",
+        Mock(
+            return_value=llm.Model(
+                id="gpt-5.4",
+                name="GPT-5.4",
+                vendor="openai",
+            )
         ),
     )
     monkeypatch.setattr(
         cli,
         "request_commit_message",
-        lambda *_args, **_kwargs: "chore: commit nested changes",
+        Mock(return_value="chore: commit nested changes"),
     )
 
     result = runner.invoke(cli.app, ["commit", "--all", "--yes"])
@@ -643,8 +699,9 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
 
     auth_called = False
 
-    def fail_if_called(_config):
+    def fail_if_called(config: object) -> None:
         nonlocal auth_called
+        del config
         auth_called = True
         raise AssertionError("Copilot authentication should not run for openai")
 
@@ -664,7 +721,7 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
     monkeypatch.setattr(
         cli,
         "request_commit_message",
-        lambda *_args, **_kwargs: "chore: use openai-compatible provider",
+        Mock(return_value="chore: use openai-compatible provider"),
     )
 
     result = runner.invoke(
@@ -1082,7 +1139,7 @@ def test_handle_split_commit_flow_falls_back_to_single_commit(
     )
     fallback = Mock()
     monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
-    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: [])
+    monkeypatch.setattr(cli, "extract_patch_units", Mock(return_value=[]))
 
     handle_split_commit_flow(repo, status, model="gpt-5.4")
 
@@ -1131,7 +1188,7 @@ def test_handle_split_commit_flow_auto_mode_always_requests_split_planning(
     monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
     monkeypatch.setattr(cli, "request_split_commit_plan", planner)
     monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
-    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "extract_patch_units", Mock(return_value=patch_units))
     monkeypatch.setattr(cli, "display_commit_message", Mock())
     monkeypatch.setattr(cli, "execute_commit_action", Mock(return_value="deadbeef"))
 
@@ -1184,7 +1241,7 @@ def test_handle_split_commit_flow_handles_invalid_plan_and_single_commit_result(
 
     fallback = Mock()
     monkeypatch.setattr(cli, "handle_single_commit_flow", fallback)
-    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "extract_patch_units", Mock(return_value=patch_units))
     monkeypatch.setattr(
         cli,
         "request_split_commit_plan",
@@ -1264,7 +1321,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
     execute_plan = Mock(return_value=["aaaabbbb", "ccccdddd"])
     display_plan = Mock()
     fallback = Mock()
-    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "extract_patch_units", Mock(return_value=patch_units))
     monkeypatch.setattr(cli, "request_split_commit_plan", request_plan)
     monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
     monkeypatch.setattr(cli, "execute_split_commit_plan", execute_plan)
@@ -1340,7 +1397,7 @@ def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
     request_plan = Mock(return_value=split_plan)
     request_messages = Mock(return_value=prepared_commits)
     execute_plan = Mock(return_value=["aaaabbbb", "ccccdddd"])
-    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "extract_patch_units", Mock(return_value=patch_units))
     monkeypatch.setattr(cli, "request_split_commit_plan", request_plan)
     monkeypatch.setattr(cli, "request_split_commit_messages", request_messages)
     monkeypatch.setattr(cli, "execute_split_commit_plan", execute_plan)
@@ -1420,7 +1477,7 @@ def test_handle_split_commit_flow_reorders_prepared_commits_before_execution(
         unordered_commits[2],
         unordered_commits[0],
     ]
-    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "extract_patch_units", Mock(return_value=patch_units))
     monkeypatch.setattr(cli, "request_split_commit_plan", Mock(return_value=split_plan))
     monkeypatch.setattr(
         cli, "request_split_commit_messages", Mock(return_value=unordered_commits)
@@ -1490,7 +1547,7 @@ def test_handle_split_commit_flow_prompts_when_plan_exceeds_preference(
         PreparedSplitCommit(message="refactor: lib", patch_units=(patch_units[1],)),
         PreparedSplitCommit(message="docs: readme", patch_units=(patch_units[2],)),
     ]
-    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "extract_patch_units", Mock(return_value=patch_units))
     monkeypatch.setattr(cli, "request_split_commit_plan", Mock(return_value=split_plan))
     confirm_ask = Mock(return_value=True)
     monkeypatch.setattr(cli.Confirm, "ask", confirm_ask)
@@ -1540,7 +1597,7 @@ def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
             summary="summary 2",
         ),
     )
-    monkeypatch.setattr(cli, "extract_patch_units", lambda _diff: patch_units)
+    monkeypatch.setattr(cli, "extract_patch_units", Mock(return_value=patch_units))
     request_plan = Mock(
         return_value=SplitCommitPlan(commits=(SplitPlanCommit(("u1", "u2")),))
     )

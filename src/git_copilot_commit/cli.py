@@ -9,12 +9,10 @@ import re
 import sys
 from typing import Annotated, Sequence
 
-import rich
-import typer
+import cyclopts
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm
-from typer.main import get_command
+from rich.prompt import Confirm, Prompt
 
 from .git import GitRepository, GitError, GitStatus, NotAGitRepositoryError
 from .split_commits import (
@@ -34,7 +32,7 @@ from .llms import core as llm
 from .llms import providers
 
 console = Console()
-app = typer.Typer(help=__doc__, add_completion=False)
+app = cyclopts.App(help=__doc__, version=lambda: f"git-copilot-commit {__version__}")
 
 COMMIT_MESSAGE_PROMPT_FILENAME = "commit-message-generator-prompt.md"
 SPLIT_COMMIT_PLANNER_PROMPT_FILENAME = "split-commit-planner-prompt.md"
@@ -57,28 +55,31 @@ NATIVE_TLS_HELP = (
 
 CaBundleOption = Annotated[
     str | None,
-    typer.Option("--ca-bundle", metavar="PATH", help=CA_BUNDLE_HELP),
+    cyclopts.Parameter(name="--ca-bundle", help=CA_BUNDLE_HELP),
 ]
 InsecureOption = Annotated[
     bool,
-    typer.Option("--insecure", help="Disable SSL certificate verification."),
+    cyclopts.Parameter(name="--insecure", help="Disable SSL certificate verification."),
 ]
 NativeTlsOption = Annotated[
     bool,
-    typer.Option("--native-tls/--no-native-tls", help=NATIVE_TLS_HELP),
+    cyclopts.Parameter(
+        name="--native-tls",
+        negative="--no-native-tls",
+        help=NATIVE_TLS_HELP,
+    ),
 ]
 ProviderOption = Annotated[
     str | None,
-    typer.Option(
-        "--provider",
+    cyclopts.Parameter(
+        name="--provider",
         help="LLM provider to use: copilot or openai.",
     ),
 ]
 BaseUrlOption = Annotated[
     str | None,
-    typer.Option(
-        "--base-url",
-        metavar="URL",
+    cyclopts.Parameter(
+        name="--base-url",
         help=(
             "Base URL for an OpenAI-compatible provider, for example "
             "http://127.0.0.1:11434/v1."
@@ -87,8 +88,8 @@ BaseUrlOption = Annotated[
 ]
 ApiKeyOption = Annotated[
     str | None,
-    typer.Option(
-        "--api-key",
+    cyclopts.Parameter(
+        name="--api-key",
         help="API key for an OpenAI-compatible provider. Omit when the server does not require one.",
     ),
 ]
@@ -96,8 +97,8 @@ ApiKeyOption = Annotated[
 
 SplitOption = Annotated[
     bool,
-    typer.Option(
-        "--split",
+    cyclopts.Parameter(
+        name="--split",
         help=(
             "Split staged hunks into multiple commits automatically. Pass "
             "`--split=N` to express a preference for N commits."
@@ -106,10 +107,10 @@ SplitOption = Annotated[
 ]
 SplitCountOption = Annotated[
     int | None,
-    typer.Option(
-        "--split-count",
-        hidden=True,
-        min=1,
+    cyclopts.Parameter(
+        name="--split-count",
+        show=False,
+        validator=cyclopts.validators.Number(gte=1),
     ),
 ]
 
@@ -225,39 +226,13 @@ def order_prepared_split_commits(
 def run(args: Sequence[str] | None = None) -> None:
     """Run the CLI entrypoint with argument normalization."""
     raw_args = list(args) if args is not None else sys.argv[1:]
-    command = get_command(app)
-    command.main(
-        args=preprocess_cli_args(raw_args),
-        prog_name=Path(sys.argv[0]).name,
-    )
+    app(preprocess_cli_args(raw_args))
 
 
-def version_callback(value: bool):
-    if value:
-        rich.print(f"git-copilot-commit [bold yellow]{__version__}[/]")
-        raise typer.Exit()
-
-
-@app.callback(invoke_without_command=True)
-def main(
-    ctx: typer.Context,
-    _: bool = typer.Option(
-        False, "--version", callback=version_callback, help="Show version and exit"
-    ),
-):
-    """
-    Automatically commit changes in the current git repository.
-    """
-    if ctx.invoked_subcommand is None:
-        # Show help when no command is provided
-        console.print(ctx.get_help())
-        raise typer.Exit()
-    else:
-        # Don't show version for print command to avoid interfering with pipes
-        if ctx.invoked_subcommand != "echo":
-            console.print(
-                f"[bold]{(__package__ or 'git_copilot_commit').replace('_', '-')}[/] - [bold green]v{__version__}[/]\n"
-            )
+def print_cli_banner() -> None:
+    """Render the CLI banner before command output."""
+    package_name = (__package__ or "git_copilot_commit").replace("_", "-")
+    console.print(f"[bold]{package_name}[/] - [bold green]v{__version__}[/]\n")
 
 
 def get_prompt_locations(filename: str):
@@ -280,7 +255,7 @@ def resolve_prompt_file() -> Path | None:
         console.print(
             f"[red]Configured default prompt file in {settings.config_file} is invalid.[/red]"
         )
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if configured_prompt_file is None:
         return None
@@ -298,7 +273,7 @@ def load_system_prompt() -> str:
             console.print(
                 f"[red]Error reading prompt file {resolved_prompt_file}: {exc}[/red]"
             )
-            raise typer.Exit(1)
+            raise SystemExit(1)
 
     return load_named_prompt(COMMIT_MESSAGE_PROMPT_FILENAME)
 
@@ -312,7 +287,7 @@ def load_named_prompt(filename: str) -> str:
             continue
 
     console.print(f"[red]Error: Prompt file {filename} not found in any location[/red]")
-    raise typer.Exit(1)
+    raise SystemExit(1)
 
 
 def build_http_client_config(
@@ -357,7 +332,7 @@ def build_commit_message_prompt(
     """Build the prompt used to generate a commit message."""
     if not status.has_staged_changes:
         console.print("[red]No staged changes to commit.[/red]")
-        raise typer.Exit()
+        raise SystemExit()
 
     prompt_parts = [
         "`git status`:\n",
@@ -505,13 +480,13 @@ def commit_with_retry_no_verify(
             "Retry commit with [bold]`-n`[/] (skip hooks) using the same commit message?",
             default=True,
         ):
-            raise typer.Exit(1)
+            raise SystemExit(1)
 
     try:
         return repo.commit(message, use_editor=use_editor, no_verify=True, env=env)
     except GitError as retry_error:
         console.print(f"[red]Commit with -n failed: {retry_error}[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
 def ensure_copilot_authentication(
@@ -533,7 +508,7 @@ def ensure_copilot_authentication(
         )
     except copilot.LLMError as exc:
         print_llm_error("Authentication failed", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
 def stage_changes_for_commit(
@@ -589,7 +564,7 @@ def request_commit_message(
             )
     except llm.LLMError as exc:
         print_llm_error("Could not generate a commit message", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
 def request_split_commit_plan(
@@ -625,7 +600,7 @@ def request_split_commit_plan(
     except llm.LLMError as exc:
         if not should_retry_with_compact_prompt(exc):
             print_llm_error("Could not generate a split commit plan", exc)
-            raise typer.Exit(1)
+            raise SystemExit(1)
 
         console.print(
             "[yellow]Staged patch units exceeded the model context window; retrying split planning with summaries only.[/yellow]"
@@ -657,7 +632,7 @@ def request_split_commit_plan(
             )
     except llm.LLMError as exc:
         print_llm_error("Could not generate a split commit plan", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     return parse_split_plan_response(
         response,
@@ -699,7 +674,7 @@ def request_split_commit_messages(
         return prepared_commits
     except llm.LLMError as exc:
         print_llm_error("Could not generate split commit messages", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
 def confirm_split_commit_count(
@@ -729,7 +704,7 @@ def confirm_split_commit_count(
         return plan
 
     console.print("Split commit plan cancelled.")
-    raise typer.Exit()
+    raise SystemExit()
 
 
 def display_commit_message(commit_message: str) -> None:
@@ -768,7 +743,7 @@ def execute_commit_action(
     if yes:
         return commit_with_retry_no_verify(repo, commit_message)
 
-    choice = typer.prompt(
+    choice = Prompt.ask(
         "Choose action: (c)ommit, (e)dit message, (q)uit",
         default="c",
         show_default=True,
@@ -776,7 +751,7 @@ def execute_commit_action(
 
     if choice == "q":
         console.print("Commit cancelled.")
-        raise typer.Exit()
+        raise SystemExit()
     if choice == "e":
         console.print("[cyan]Opening git editor...[/cyan]")
         return commit_with_retry_no_verify(repo, commit_message, use_editor=True)
@@ -784,7 +759,7 @@ def execute_commit_action(
         return commit_with_retry_no_verify(repo, commit_message)
 
     console.print("Invalid choice. Commit cancelled.")
-    raise typer.Exit()
+    raise SystemExit()
 
 
 def execute_split_commit_plan(
@@ -796,7 +771,7 @@ def execute_split_commit_plan(
     """Run the split-commit plan against temporary alternate indexes."""
     use_editor = False
     if not yes:
-        choice = typer.prompt(
+        choice = Prompt.ask(
             "Choose action: (c)ommit all, (e)dit each message, (q)uit",
             default="c",
             show_default=True,
@@ -804,12 +779,12 @@ def execute_split_commit_plan(
 
         if choice == "q":
             console.print("Commit cancelled.")
-            raise typer.Exit()
+            raise SystemExit()
         if choice == "e":
             use_editor = True
         elif choice != "c":
             console.print("Invalid choice. Commit cancelled.")
-            raise typer.Exit()
+            raise SystemExit()
 
     execution_state = SplitCommitExecutionState(
         original_head_sha=repo.get_head_sha() if repo.has_commit("HEAD") else None,
@@ -839,7 +814,7 @@ def execute_split_commit_plan(
                     console.print(
                         f"[red]Failed to apply the planned changes for commit {index}: {exc}[/red]"
                     )
-                    raise typer.Exit(1)
+                    raise SystemExit(1)
 
                 try:
                     commit_shas.append(
@@ -851,7 +826,7 @@ def execute_split_commit_plan(
                     )
                 except GitError as exc:
                     console.print(f"[red]Failed to create commit {index}: {exc}[/red]")
-                    raise typer.Exit(1)
+                    raise SystemExit(1)
     except BaseException:
         try:
             if execution_state.original_head_sha is not None:
@@ -1014,22 +989,29 @@ def handle_split_commit_flow(
         console.print(f"[green]{commit_sha[:8]}[/green] {prepared_commit.message}")
 
 
-@app.command("authenticate")
-@app.command("login", hidden=True)
+@app.command(name="authenticate")
+@app.command(name="login", show=False)
 def authenticate(
-    enterprise_domain: str | None = typer.Option(
-        None,
-        "--enterprise-domain",
-        help="GitHub Enterprise hostname. Omit for github.com.",
-    ),
-    force: bool = typer.Option(
-        False, "--force", help="Replace cached GitHub Copilot credentials"
-    ),
+    enterprise_domain: Annotated[
+        str | None,
+        cyclopts.Parameter(
+            name="--enterprise-domain",
+            help="GitHub Enterprise hostname. Omit for github.com.",
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name="--force",
+            help="Replace cached GitHub Copilot credentials",
+        ),
+    ] = False,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
     native_tls: NativeTlsOption = False,
 ):
     """Authenticate with GitHub Copilot and cache credentials locally."""
+    print_cli_banner()
     http_client_config = build_http_client_config(
         ca_bundle=ca_bundle,
         insecure=insecure,
@@ -1043,10 +1025,10 @@ def authenticate(
         )
     except copilot.LLMError as exc:
         print_llm_error("Authentication failed", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
-@app.command("summary")
+@app.command(name="summary")
 def summary(
     provider: ProviderOption = None,
     base_url: BaseUrlOption = None,
@@ -1056,6 +1038,7 @@ def summary(
     native_tls: NativeTlsOption = False,
 ):
     """Show the configured LLM provider summary."""
+    print_cli_banner()
     http_client_config = build_http_client_config(
         ca_bundle=ca_bundle,
         insecure=insecure,
@@ -1073,24 +1056,27 @@ def summary(
         )
     except llm.LLMError as exc:
         print_llm_error("Could not load provider summary", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
-@app.command("models")
+@app.command(name="models")
 def models_command(
     provider: ProviderOption = None,
     base_url: BaseUrlOption = None,
     api_key: ApiKeyOption = None,
-    vendor: str | None = typer.Option(
-        None,
-        "--vendor",
-        help="Filter listed models by vendor: anthropic, gemini/google, or openai.",
-    ),
+    vendor: Annotated[
+        str | None,
+        cyclopts.Parameter(
+            name="--vendor",
+            help="Filter listed models by vendor: anthropic, gemini/google, or openai.",
+        ),
+    ] = None,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
     native_tls: NativeTlsOption = False,
 ):
     """List available models for the configured LLM provider."""
+    print_cli_banner()
     http_client_config = build_http_client_config(
         ca_bundle=ca_bundle,
         insecure=insecure,
@@ -1118,32 +1104,41 @@ def models_command(
         )
     except llm.LLMError as exc:
         print_llm_error("Could not load models", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
 
-@app.command()
+@app.command
 def commit(
-    all_files: bool = typer.Option(
-        False, "--all", "-a", help="Stage all files before committing"
-    ),
+    all_files: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name=("--all", "-a"),
+            help="Stage all files before committing",
+        ),
+    ] = False,
     split: SplitOption = False,
     split_count: SplitCountOption = None,
-    model: str | None = typer.Option(
-        None,
-        "--model",
-        "-m",
-        metavar="MODEL_ID",
-        help="Model to use for generating commit message",
-    ),
-    yes: bool = typer.Option(
-        False, "--yes", "-y", help="Automatically accept the generated commit message"
-    ),
-    context: str = typer.Option(
-        "",
-        "--context",
-        "-c",
-        help="Optional user-provided context to guide commit message",
-    ),
+    model: Annotated[
+        str | None,
+        cyclopts.Parameter(
+            name=("--model", "-m"),
+            help="Model to use for generating commit message",
+        ),
+    ] = None,
+    yes: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name=("--yes", "-y"),
+            help="Automatically accept the generated commit message",
+        ),
+    ] = False,
+    context: Annotated[
+        str,
+        cyclopts.Parameter(
+            name=("--context", "-c"),
+            help="Optional user-provided context to guide commit message",
+        ),
+    ] = "",
     provider: ProviderOption = None,
     base_url: BaseUrlOption = None,
     api_key: ApiKeyOption = None,
@@ -1154,11 +1149,12 @@ def commit(
     """
     Generate commit message based on changes in the current git repository and commit them.
     """
+    print_cli_banner()
     try:
         repo = GitRepository()
     except NotAGitRepositoryError:
         console.print("[red]Error: Not in a git repository[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     http_client_config = build_http_client_config(
         ca_bundle=ca_bundle,
@@ -1173,7 +1169,7 @@ def commit(
         )
     except llm.LLMError as exc:
         print_llm_error("Could not resolve the LLM provider", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     if provider_config.provider == "copilot":
         ensure_copilot_authentication(http_client_config)
@@ -1183,7 +1179,7 @@ def commit(
 
     if not status.files:
         console.print("[yellow]No changes to commit.[/yellow]")
-        raise typer.Exit()
+        raise SystemExit()
 
     status = stage_changes_for_commit(repo, status, all_files=all_files)
 
@@ -1201,7 +1197,7 @@ def commit(
         )
     except llm.LLMError as exc:
         print_llm_error("Could not select a model", exc)
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     display_selected_model(selected_model)
     model = selected_model.id
