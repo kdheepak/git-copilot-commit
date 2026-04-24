@@ -118,7 +118,7 @@ def test_ask_openai_provider_uses_chat_completions(
         if request.url.path == "/v1/chat/completions":
             assert request.headers.get("authorization") is None
             request_payload = json.loads(request.content.decode("utf-8"))
-            assert request_payload["model"] == "llama3.2"
+            assert request_payload["model"] == "openai/gpt-oss-120b"
             assert request_payload["messages"][0]["content"] == "Write a commit message"
             return httpx.Response(
                 200,
@@ -143,7 +143,7 @@ def test_ask_openai_provider_uses_chat_completions(
             provider="openai",
             base_url="http://127.0.0.1:11434/v1",
         ),
-        model="llama3.2",
+        model="openai/gpt-oss-120b",
     )
 
     assert response == "feat: add local llm support"

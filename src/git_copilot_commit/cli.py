@@ -383,7 +383,6 @@ def normalize_model_name(model: str | None) -> str | None:
     if model is not None:
         for prefix in (
             "copilot/",
-            "openai/",
             "openai-compatible/",
         ):
             if model.startswith(prefix):

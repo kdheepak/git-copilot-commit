@@ -367,7 +367,8 @@ def test_build_http_client_config_and_normalize_model_name(
     assert config.ca_bundle == str(tmp_path / "certs" / "custom.pem")
     assert not config.use_native_tls
     assert normalize_model_name("copilot/gpt-5.4") == "gpt-5.4"
-    assert normalize_model_name("openai/llama3.2") == "llama3.2"
+    assert normalize_model_name("openai/gpt-oss-120b") == "openai/gpt-oss-120b"
+    assert normalize_model_name("openai-compatible/llama3.2") == "llama3.2"
     assert normalize_model_name("gpt-5.4") == "gpt-5.4"
     assert normalize_model_name(None) is None
 
@@ -593,16 +594,16 @@ def test_commit_command_from_subdirectory_stages_the_entire_repository(
     backend_dir = git_repo_path / "backend"
     frontend_dir.mkdir()
     backend_dir.mkdir()
-    frontend_file = frontend_dir / "component.py"
-    backend_file = backend_dir / "service.py"
+    frontend_file = frontend_dir / "component.txt"
+    backend_file = backend_dir / "service.txt"
 
-    frontend_file.write_text("print('frontend v1')\n", encoding="utf-8")
-    backend_file.write_text("print('backend v1')\n", encoding="utf-8")
+    frontend_file.write_text("frontend v1\n", encoding="utf-8")
+    backend_file.write_text("backend v1\n", encoding="utf-8")
     repo.stage_files()
     repo.commit("chore: init", no_verify=True)
 
-    frontend_file.write_text("print('frontend v2')\n", encoding="utf-8")
-    backend_file.write_text("print('backend v2')\n", encoding="utf-8")
+    frontend_file.write_text("frontend v2\n", encoding="utf-8")
+    backend_file.write_text("backend v2\n", encoding="utf-8")
 
     monkeypatch.chdir(frontend_dir)
     monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
@@ -634,11 +635,11 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo = cli.GitRepository(git_repo_path)
-    file_path = git_repo_path / "file.txt"
-    file_path.write_text("one\n", encoding="utf-8")
-    repo.stage_files(["file.txt"])
+    file_path = git_repo_path / "example.txt"
+    file_path.write_text("v1\n", encoding="utf-8")
+    repo.stage_files(["example.txt"])
     repo.commit("chore: init", no_verify=True)
-    file_path.write_text("two\n", encoding="utf-8")
+    file_path.write_text("v2\n", encoding="utf-8")
 
     auth_called = False
 
@@ -648,20 +649,23 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
         raise AssertionError("Copilot authentication should not run for openai")
 
     monkeypatch.setattr(cli, "ensure_copilot_authentication", fail_if_called)
+    ensure_model_ready = Mock(
+        return_value=llm.Model(
+            id="openai/gpt-oss-120b",
+            name="openai/gpt-oss-120b",
+        )
+    )
+    monkeypatch.chdir(git_repo_path)
     monkeypatch.setattr(
         cli.providers,
         "ensure_model_ready",
-        lambda **_kwargs: llm.Model(
-            id="llama3.2",
-            name="llama3.2",
-        ),
+        ensure_model_ready,
     )
     monkeypatch.setattr(
         cli,
         "request_commit_message",
         lambda *_args, **_kwargs: "chore: use openai-compatible provider",
     )
-    monkeypatch.chdir(git_repo_path)
 
     result = runner.invoke(
         cli.app,
@@ -672,12 +676,22 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
             "--provider",
             "openai",
             "--base-url",
-            "http://127.0.0.1:11434/v1",
+            "http://example.com:8001/v1/chat/completions",
+            "--model",
+            "openai/gpt-oss-120b",
         ],
     )
 
     assert result.exit_code == 0
     assert not auth_called
+    assert ensure_model_ready.call_args.kwargs["model"] == "openai/gpt-oss-120b"
+    assert ensure_model_ready.call_args.kwargs["provider_config"] == (
+        cli.providers.ProviderConfig(
+            provider="openai",
+            base_url="http://example.com:8001/v1",
+            api_key=None,
+        )
+    )
     assert repo.get_recent_commits(limit=1)[0][1] == (
         "chore: use openai-compatible provider"
     )
