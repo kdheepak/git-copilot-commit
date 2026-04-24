@@ -142,7 +142,7 @@ class Model:
 
 @dataclass(frozen=True, slots=True)
 class HttpClientConfig:
-    native_tls: bool = False
+    native_tls: bool = True
     insecure: bool = False
     ca_bundle: str | None = None
 
@@ -441,6 +441,76 @@ def filter_models_by_vendor(
     return filtered
 
 
+def _model_id_matches(model_id: str, keywords: tuple[str, ...]) -> bool:
+    normalized = model_id.lower()
+    return any(keyword in normalized for keyword in keywords)
+
+
+def _is_openai_reasoning_model(model_id: str) -> bool:
+    normalized = model_id.lower()
+    return normalized.startswith(("o1", "o3", "o4")) or "/o" in normalized
+
+
+def _uses_chat_template_thinking_controls(model_id: str) -> bool:
+    return _model_id_matches(
+        model_id,
+        (
+            "qwen",
+            "deepseek",
+            "granite",
+            "glm",
+            "hunyuan",
+            "magistral",
+            "mistral",
+            "nemotron",
+            "seed",
+            "step",
+        ),
+    )
+
+
+def disable_thinking_options(
+    *,
+    model_id: str,
+    api_surface: str,
+) -> dict[str, Any]:
+    normalized = model_id.lower()
+
+    if api_surface == "responses":
+        if "gpt-5" in normalized:
+            return {"reasoning": {"effort": "minimal"}}
+        if "gpt-oss" in normalized or _is_openai_reasoning_model(model_id):
+            return {"reasoning": {"effort": "low"}}
+        if _uses_chat_template_thinking_controls(model_id):
+            return {
+                "reasoning_effort": "none",
+                "chat_template_kwargs": {
+                    "enable_thinking": False,
+                    "thinking": False,
+                },
+            }
+        return {}
+
+    if "gemini" in normalized:
+        return {"reasoning_effort": "none"}
+    if "gpt-5" in normalized:
+        return {"reasoning_effort": "minimal"}
+    if "gpt-oss" in normalized or _is_openai_reasoning_model(model_id):
+        return {"reasoning_effort": "low"}
+    if "claude" in normalized or "anthropic" in normalized:
+        return {"thinking": {"type": "disabled"}}
+    if _uses_chat_template_thinking_controls(model_id):
+        return {
+            "reasoning_effort": "none",
+            "chat_template_kwargs": {
+                "enable_thinking": False,
+                "thinking": False,
+            },
+        }
+
+    return {}
+
+
 def extract_completion_text(payload: Any) -> str:
     if not isinstance(payload, dict):
         raise LLMError("Chat completion returned an invalid payload.")
@@ -459,7 +529,9 @@ def extract_completion_text(payload: Any) -> str:
 
     content = message.get("content")
     if isinstance(content, str):
-        return content.strip()
+        stripped = content.strip()
+        if stripped:
+            return stripped
 
     if isinstance(content, list):
         text_parts: list[str] = []
@@ -477,6 +549,41 @@ def extract_completion_text(payload: Any) -> str:
         if joined:
             return joined
 
+    finish_reason = choice.get("finish_reason")
+    reasoning = message.get("reasoning")
+    has_reasoning = isinstance(reasoning, str) and reasoning.strip()
+    finish_reason_detail: str | None = None
+    if finish_reason is not None:
+        try:
+            finish_reason_detail = json.dumps(finish_reason)
+        except TypeError:
+            finish_reason_detail = repr(finish_reason)
+        finish_reason_detail = truncate_response_detail(finish_reason_detail)
+
+    if finish_reason == "length":
+        detail = (
+            " The response contained reasoning text but no final assistant content."
+            if has_reasoning
+            else ""
+        )
+        raise LLMError(
+            "Chat completion reached the completion token limit before returning "
+            'message content (finish_reason="length").'
+            f"{detail} Increase `max_tokens` or reduce the prompt."
+        )
+
+    if finish_reason_detail is not None:
+        raise LLMError(
+            "Chat completion message content was empty "
+            f"(finish_reason={finish_reason_detail})."
+        )
+
+    if has_reasoning:
+        raise LLMError(
+            "Chat completion message content was empty. The response contained "
+            "reasoning text but no final assistant content."
+        )
+
     raise LLMError("Chat completion message content was empty.")
 
 
@@ -487,24 +594,34 @@ def chat_completion_request(
     *,
     model_id: str,
     prompt: str,
+    disable_thinking: bool = False,
 ) -> str:
+    request_body: dict[str, Any] = {
+        "model": model_id,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": 1024,
+        "stream": False,
+    }
+    if disable_thinking:
+        request_body.update(
+            disable_thinking_options(
+                model_id=model_id,
+                api_surface="chat_completions",
+            )
+        )
+
     payload = request_json(
         client,
         "POST",
         url,
         headers=headers,
-        json_body={
-            "model": model_id,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            "temperature": 0,
-            "max_tokens": 1024,
-            "stream": False,
-        },
+        json_body=request_body,
     )
     return extract_completion_text(payload)
 
@@ -558,6 +675,7 @@ def responses_completion_request(
     *,
     model_id: str,
     prompt: str,
+    disable_thinking: bool = False,
 ) -> str:
     request_body = {
         "model": model_id,
@@ -575,6 +693,13 @@ def responses_completion_request(
         "stream": True,
         "store": False,
     }
+    if disable_thinking:
+        request_body.update(
+            disable_thinking_options(
+                model_id=model_id,
+                api_surface="responses",
+            )
+        )
 
     for attempt in range(HTTP_RETRY_ATTEMPTS):
         text_parts: list[str] = []
