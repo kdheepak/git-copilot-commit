@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -294,6 +295,44 @@ def test_extract_completion_text_handles_supported_shapes() -> None:
         llm.extract_completion_text({"choices": [{"message": {"content": []}}]})
 
 
+def test_extract_completion_text_reports_length_limited_reasoning_response() -> None:
+    with pytest.raises(llm.LLMError) as error:
+        llm.extract_completion_text(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "content": None,
+                            "reasoning": "Thinking consumed the response budget.",
+                        },
+                    }
+                ]
+            }
+        )
+
+    message = str(error.value)
+    assert "completion token limit" in message
+    assert "reasoning text but no final assistant content" in message
+    assert "`max_tokens`" in message
+
+
+def test_extract_completion_text_reports_provider_finish_reason_value() -> None:
+    with pytest.raises(llm.LLMError) as error:
+        llm.extract_completion_text(
+            {
+                "choices": [
+                    {
+                        "finish_reason": {"code": "provider-specific"},
+                        "message": {"content": None},
+                    }
+                ]
+            }
+        )
+
+    assert 'finish_reason={"code": "provider-specific"}' in str(error.value)
+
+
 def test_extract_response_text_handles_text_refusals_and_errors() -> None:
     assert llm.extract_response_text({"output_text": "  feat: add support  "}) == (
         "feat: add support"
@@ -322,6 +361,98 @@ def test_extract_response_text_handles_text_refusals_and_errors() -> None:
 
     with pytest.raises(llm.LLMError):
         llm.extract_response_text({"output": []})
+
+
+def test_chat_completion_request_disables_qwen_thinking() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_payload = json.loads(request.content.decode("utf-8"))
+        assert request_payload["model"] == "Qwen/Qwen3.6-35B-A3B"
+        assert request_payload["reasoning_effort"] == "none"
+        assert request_payload["chat_template_kwargs"] == {
+            "enable_thinking": False,
+            "thinking": False,
+        }
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"choices": [{"message": {"content": "feat: disable thinking"}}]},
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        response = llm.chat_completion_request(
+            client,
+            "https://example.com/v1/chat/completions",
+            {},
+            model_id="Qwen/Qwen3.6-35B-A3B",
+            prompt="Write a commit message",
+            disable_thinking=True,
+        )
+
+    assert response == "feat: disable thinking"
+
+
+def test_disable_thinking_options_cover_major_model_families() -> None:
+    assert llm.disable_thinking_options(
+        model_id="gemini-2.5-flash",
+        api_surface="chat_completions",
+    ) == {"reasoning_effort": "none"}
+    assert llm.disable_thinking_options(
+        model_id="gpt-5.4",
+        api_surface="chat_completions",
+    ) == {"reasoning_effort": "minimal"}
+    assert llm.disable_thinking_options(
+        model_id="openai/gpt-oss-120b",
+        api_surface="chat_completions",
+    ) == {"reasoning_effort": "low"}
+    assert llm.disable_thinking_options(
+        model_id="claude-sonnet-4.6",
+        api_surface="chat_completions",
+    ) == {"thinking": {"type": "disabled"}}
+    assert llm.disable_thinking_options(
+        model_id="Qwen/Qwen3.6-35B-A3B",
+        api_surface="chat_completions",
+    ) == {
+        "reasoning_effort": "none",
+        "chat_template_kwargs": {
+            "enable_thinking": False,
+            "thinking": False,
+        },
+    }
+    assert llm.disable_thinking_options(
+        model_id="gpt-5.4",
+        api_surface="responses",
+    ) == {"reasoning": {"effort": "minimal"}}
+
+
+def test_responses_completion_request_disables_gpt5_thinking() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_payload = json.loads(request.content.decode("utf-8"))
+        assert request_payload["model"] == "gpt-5.4"
+        assert request_payload["reasoning"] == {"effort": "minimal"}
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                "event: response.output_text.delta\n"
+                'data: {"delta":"feat: disable thinking"}\n\n'
+                "event: response.completed\n"
+                'data: {"response":{"status":"completed"}}\n\n'
+            ),
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        response = llm.responses_completion_request(
+            client,
+            "https://example.com/v1/responses",
+            {},
+            model_id="gpt-5.4",
+            prompt="Write a commit message",
+            disable_thinking=True,
+        )
+
+    assert response == "feat: disable thinking"
 
 
 def test_request_json_retries_rate_limits_and_honors_retry_after(
@@ -367,8 +498,12 @@ def test_request_json_retries_transient_transport_errors(
     attempts = 0
     sleep_calls: list[float] = []
 
+    def zero_jitter(*values: object) -> float:
+        del values
+        return 0.0
+
     monkeypatch.setattr(llm.time, "sleep", sleep_calls.append)
-    monkeypatch.setattr(llm.random, "uniform", lambda _a, _b: 0.0)
+    monkeypatch.setattr(llm.random, "uniform", zero_jitter)
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
@@ -400,8 +535,12 @@ def test_complete_text_prompt_retries_retryable_http_errors(
     attempts = 0
     sleep_calls: list[float] = []
 
+    def zero_jitter(*values: object) -> float:
+        del values
+        return 0.0
+
     monkeypatch.setattr(llm.time, "sleep", sleep_calls.append)
-    monkeypatch.setattr(llm.random, "uniform", lambda _a, _b: 0.0)
+    monkeypatch.setattr(llm.random, "uniform", zero_jitter)
 
     credentials = copilot.CopilotCredentials(
         github_access_token="ghu_123",
