@@ -102,15 +102,6 @@ git-copilot-commit --help
 
    If your server requires an API key, also pass `--api-key ...` or set `OPENAI_API_KEY`.
 
-3. Example: use a self-hosted GPT-OSS model:
-
-   ```bash
-   uvx git-copilot-commit commit \
-     --provider openai \
-     --base-url http://example.com:8001/v1/chat/completions \
-     --model openai/gpt-oss-120b
-   ```
-
 ## Usage
 
 ### Commit changes
@@ -171,13 +162,18 @@ uvx git-copilot-commit commit \
   --model your-model-id
 ```
 
-Use a self-hosted GPT-OSS endpoint:
+Example with `openai/gpt-oss-120b` and `Qwen/Qwen3.6-35B-A3B`:
 
 ```bash
 uvx git-copilot-commit commit \
   --provider openai \
   --base-url http://example.com:8001/v1/chat/completions \
   --model openai/gpt-oss-120b
+
+uvx git-copilot-commit commit \
+  --provider openai \
+  --base-url http://example.com:8002/v1/chat/completions \
+  --model Qwen/Qwen3.6-35B-A3B
 ```
 
 Split staged hunks into separate commits:
