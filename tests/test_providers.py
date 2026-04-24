@@ -32,7 +32,7 @@ def test_resolve_provider_config_infers_openai_from_base_url(
     )
 
     assert config.provider == "openai"
-    assert config.base_url == "http://127.0.0.1:11434/v1"
+    assert config.base_url == "http://127.0.0.1:11434/v1/chat/completions"
     assert config.api_key is None
 
 
@@ -48,7 +48,7 @@ def test_resolve_provider_config_uses_nested_llm_settings(
             {
                 "llm": {
                     "provider": "openai-compatible",
-                    "base_url": "http://127.0.0.1:11434/v1",
+                    "base_url": "http://127.0.0.1:11434/v1/chat/completions",
                     "api_key": "  ",
                 }
             }
@@ -58,7 +58,7 @@ def test_resolve_provider_config_uses_nested_llm_settings(
     config = providers.resolve_provider_config()
 
     assert config.provider == "openai"
-    assert config.base_url == "http://127.0.0.1:11434/v1"
+    assert config.base_url == "http://127.0.0.1:11434/v1/chat/completions"
     assert config.api_key is None
 
 
@@ -103,11 +103,11 @@ def test_get_available_models_for_openai_provider(
     inventory = providers.get_available_models(
         provider_config=providers.ProviderConfig(
             provider="openai",
-            base_url="http://127.0.0.1:11434/v1",
+            base_url="http://127.0.0.1:11434/v1/models",
         )
     )
 
-    assert inventory.base_url == "http://127.0.0.1:11434/v1"
+    assert inventory.base_url == "http://127.0.0.1:11434/v1/models"
     assert [model.id for model in inventory.models] == ["llama3.2"]
     assert inventory.models[0].supported_endpoints == ("/chat/completions",)
     assert llm.infer_api_surface(inventory.models[0]) == "chat_completions"
@@ -124,6 +124,7 @@ def test_ask_openai_provider_uses_chat_completions(
             request_payload = json.loads(request.content.decode("utf-8"))
             assert request_payload["model"] == "openai/gpt-oss-120b"
             assert request_payload["messages"][0]["content"] == "Write a commit message"
+            assert request_payload["max_tokens"] == 1024
             assert "reasoning_effort" not in request_payload
             assert "chat_template_kwargs" not in request_payload
             return httpx.Response(
@@ -151,7 +152,7 @@ def test_ask_openai_provider_uses_chat_completions(
         "Write a commit message",
         provider_config=providers.ProviderConfig(
             provider="openai",
-            base_url="http://127.0.0.1:11434/v1",
+            base_url="http://127.0.0.1:11434/v1/chat/completions",
         ),
         model="openai/gpt-oss-120b",
     )
@@ -168,6 +169,7 @@ def test_ask_openai_provider_can_disable_thinking(
         if request.url.path == "/v1/chat/completions":
             request_payload = json.loads(request.content.decode("utf-8"))
             assert request_payload["model"] == "Qwen/Qwen3.6-35B-A3B"
+            assert request_payload["max_tokens"] == 4096
             assert request_payload["reasoning_effort"] == "none"
             assert request_payload["chat_template_kwargs"] == {
                 "enable_thinking": False,
@@ -196,13 +198,77 @@ def test_ask_openai_provider_can_disable_thinking(
         "Write a commit message",
         provider_config=providers.ProviderConfig(
             provider="openai",
-            base_url="http://127.0.0.1:11434/v1",
+            base_url="http://127.0.0.1:11434/v1/chat/completions",
         ),
         model="Qwen/Qwen3.6-35B-A3B",
         disable_thinking=True,
+        max_tokens=4096,
     )
 
     assert response == "feat: disable thinking"
+
+
+def test_ask_openai_provider_uses_responses_endpoint_from_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(providers, "Settings", lambda: FakeSettings())
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/responses":
+            request_payload = json.loads(request.content.decode("utf-8"))
+            assert request_payload["model"] == "gpt-5.4"
+            assert request_payload["max_output_tokens"] == 1024
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=(
+                    "event: response.output_text.delta\n"
+                    'data: {"delta":"feat: use responses endpoint"}\n\n'
+                    "event: response.completed\n"
+                    'data: {"response":{"status":"completed"}}\n\n'
+                ),
+                request=request,
+            )
+
+        raise AssertionError(f"Unexpected request path: {request.url.path}")
+
+    def make_http_client(config: object | None = None) -> httpx.Client:
+        del config
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(
+        openai_api.llm,
+        "make_http_client",
+        make_http_client,
+    )
+
+    response = providers.ask(
+        "Write a commit message",
+        provider_config=providers.ProviderConfig(
+            provider="openai",
+            base_url="http://127.0.0.1:11434/v1/responses",
+        ),
+        model="gpt-5.4",
+        max_tokens=1024,
+    )
+
+    assert response == "feat: use responses endpoint"
+
+
+def test_openai_generation_rejects_non_generation_url() -> None:
+    with pytest.raises(llm.LLMError, match="/chat/completions.*or.*/responses"):
+        openai_api.ask(
+            "Write a commit message",
+            base_url="http://127.0.0.1:11434/v1",
+            model="gpt-5.4",
+        )
+
+
+def test_openai_model_listing_requires_models_url() -> None:
+    with pytest.raises(llm.LLMError, match="/models"):
+        openai_api.get_available_models(
+            base_url="http://127.0.0.1:11434/v1",
+        )
 
 
 def test_ensure_model_ready_uses_configured_default_without_model_lookup(
@@ -229,7 +295,7 @@ def test_ensure_model_ready_uses_configured_default_without_model_lookup(
     model = providers.ensure_model_ready(
         provider_config=providers.ProviderConfig(
             provider="openai",
-            base_url="http://127.0.0.1:11434/v1",
+            base_url="http://127.0.0.1:11434/v1/chat/completions",
         )
     )
 
