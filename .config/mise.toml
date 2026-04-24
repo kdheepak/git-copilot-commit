@@ -6,7 +6,7 @@ pipx.uvx = true
 uv = "latest"
 python = "latest"
 
-[tasks."github-copilot-commit:commit"]
+[tasks."git-copilot-commit:commit"]
 description = "Pass all arguments directly to git-copilot-commit commit"
 usage = """
 arg "[args]" var=#true help="Arguments to pass to git-copilot-commit commit"
@@ -22,7 +22,7 @@ fi
 uv run git-copilot-commit commit "${args[@]}"
 """
 
-[tasks."github-copilot-commit:next-version"]
+[tasks."git-copilot-commit:next-version"]
 description = "Get the next version based on bump type"
 usage = """
 arg "[type]" help="Version bump type" default="patch" {
@@ -54,7 +54,7 @@ esac
 printf 'v%s.%s.%s\n' "$major" "$minor" "$patch"
 """
 
-[tasks."github-copilot-commit:bump"]
+[tasks."git-copilot-commit:bump"]
 description = "Create an empty version bump commit and tag"
 usage = """
 arg "[type]" help="Version bump type" default="patch" {
@@ -74,7 +74,7 @@ echo "✓ Created commit and tag for $new_version"
 echo "  Run: 'mise run release $new_version'"
 """
 
-[tasks."github-copilot-commit:release"]
+[tasks."git-copilot-commit:release"]
 description = "Push a tag and create a GitHub release"
 usage = """
 arg "<version>" help="Version tag to push and release"
@@ -94,6 +94,6 @@ gh release create "$version" --title "$version" --generate-notes
 echo "✓ Release $version created and pushed"
 """
 
-[tasks."github-copilot-commit:test"]
+[tasks."git-copilot-commit:test"]
 description = "Run tests with uv and pytest"
 run = "uv run --with pytest pytest"
