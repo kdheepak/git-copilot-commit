@@ -154,6 +154,7 @@ def test_generate_commit_message_for_status_normalizes_model_prefix(
     assert message == "feat: add example"
     assert mock_ask.call_count == 1
     assert mock_ask.call_args.kwargs["model"] == "gpt-5.4"
+    assert mock_ask.call_args.kwargs["disable_thinking"] is True
     rendered_prompt = mock_ask.call_args.args[0]
     assert "system prompt" in rendered_prompt
     assert "Prefer feat scope" in rendered_prompt
@@ -185,6 +186,8 @@ def test_generate_commit_message_for_status_retries_without_diff_on_context_over
 
     assert message == "feat: add example"
     assert mock_ask.call_count == 2
+    assert mock_ask.call_args_list[0].kwargs["disable_thinking"] is True
+    assert mock_ask.call_args_list[1].kwargs["disable_thinking"] is True
     first_prompt = mock_ask.call_args_list[0].args[0]
     second_prompt = mock_ask.call_args_list[1].args[0]
     assert "`git diff --staged`" in first_prompt
@@ -251,6 +254,8 @@ def test_request_split_commit_plan_retries_without_patches_on_context_overflow(
 
     assert [commit.unit_ids for commit in plan.commits] == [("u1",), ("u2",)]
     assert mock_ask.call_count == 2
+    assert mock_ask.call_args_list[0].kwargs["disable_thinking"] is True
+    assert mock_ask.call_args_list[1].kwargs["disable_thinking"] is True
     first_prompt = mock_ask.call_args_list[0].args[1]
     second_prompt = mock_ask.call_args_list[1].args[1]
     assert "```diff" in first_prompt
@@ -409,12 +414,15 @@ def test_build_http_client_config_and_normalize_model_name(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
+    default_config = llm.HttpClientConfig()
     config = build_http_client_config(
         ca_bundle="~/certs/custom.pem",
         insecure=False,
         native_tls=True,
     )
 
+    assert default_config.native_tls
+    assert default_config.use_native_tls
     assert config.ca_bundle == str(tmp_path / "certs" / "custom.pem")
     assert not config.use_native_tls
     assert normalize_model_name("copilot/gpt-5.4") == "gpt-5.4"
@@ -422,6 +430,40 @@ def test_build_http_client_config_and_normalize_model_name(
     assert normalize_model_name("openai-compatible/llama3.2") == "llama3.2"
     assert normalize_model_name("gpt-5.4") == "gpt-5.4"
     assert normalize_model_name(None) is None
+
+
+def test_summary_command_defaults_to_native_tls_and_can_disable_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    show_summary = Mock()
+    monkeypatch.setattr(cli.providers, "show_summary", show_summary)
+
+    default_result = runner.invoke(
+        cli.app,
+        [
+            "summary",
+            "--provider",
+            "openai",
+            "--base-url",
+            "http://example.com/v1",
+        ],
+    )
+    disabled_result = runner.invoke(
+        cli.app,
+        [
+            "summary",
+            "--provider",
+            "openai",
+            "--base-url",
+            "http://example.com/v1",
+            "--no-native-tls",
+        ],
+    )
+
+    assert default_result.exit_code == 0
+    assert disabled_result.exit_code == 0
+    assert show_summary.call_args_list[0].kwargs["http_client_config"].native_tls
+    assert not show_summary.call_args_list[1].kwargs["http_client_config"].native_tls
 
 
 def test_extract_conventional_commit_type_supports_scope_and_breaking_change() -> None:
@@ -718,11 +760,8 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
         "ensure_model_ready",
         ensure_model_ready,
     )
-    monkeypatch.setattr(
-        cli,
-        "request_commit_message",
-        Mock(return_value="chore: use openai-compatible provider"),
-    )
+    request_commit_message = Mock(return_value="chore: use openai-compatible provider")
+    monkeypatch.setattr(cli, "request_commit_message", request_commit_message)
 
     result = runner.invoke(
         cli.app,
@@ -742,6 +781,7 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
     assert result.exit_code == 0
     assert not auth_called
     assert ensure_model_ready.call_args.kwargs["model"] == "openai/gpt-oss-120b"
+    assert ensure_model_ready.call_args.kwargs["http_client_config"].native_tls
     assert ensure_model_ready.call_args.kwargs["provider_config"] == (
         cli.providers.ProviderConfig(
             provider="openai",
@@ -749,9 +789,50 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
             api_key=None,
         )
     )
+    assert request_commit_message.call_args.kwargs["disable_thinking"] is True
     assert repo.get_recent_commits(limit=1)[0][1] == (
         "chore: use openai-compatible provider"
     )
+
+
+def test_commit_command_can_enable_thinking(
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = cli.GitRepository(git_repo_path)
+    file_path = git_repo_path / "example.txt"
+    file_path.write_text("v1\n", encoding="utf-8")
+    repo.stage_files(["example.txt"])
+    repo.commit("chore: init", no_verify=True)
+    file_path.write_text("v2\n", encoding="utf-8")
+
+    monkeypatch.chdir(git_repo_path)
+    monkeypatch.setattr(cli, "ensure_copilot_authentication", Mock(return_value=None))
+    monkeypatch.setattr(
+        cli.providers,
+        "ensure_model_ready",
+        Mock(
+            return_value=llm.Model(
+                id="gpt-5.4",
+                name="gpt-5.4",
+            )
+        ),
+    )
+    request_commit_message = Mock(return_value="chore: enable thinking")
+    monkeypatch.setattr(cli, "request_commit_message", request_commit_message)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "commit",
+            "--all",
+            "--yes",
+            "--enable-thinking",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert request_commit_message.call_args.kwargs["disable_thinking"] is False
 
 
 def test_execute_split_commit_plan_creates_multiple_commits(
@@ -1207,6 +1288,7 @@ def test_handle_split_commit_flow_auto_mode_always_requests_split_planning(
         context="",
         provider_config=None,
         http_client_config=None,
+        disable_thinking=True,
     )
 
 
@@ -1343,6 +1425,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
         context="",
         provider_config=None,
         http_client_config=None,
+        disable_thinking=True,
     )
     request_messages.assert_called_once_with(
         split_plan,
@@ -1351,6 +1434,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
         context="",
         provider_config=None,
         http_client_config=None,
+        disable_thinking=True,
     )
     display_plan.assert_called_once_with(prepared_commits)
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
@@ -1419,6 +1503,7 @@ def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
         context="",
         provider_config=None,
         http_client_config=None,
+        disable_thinking=True,
     )
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
 
@@ -1629,4 +1714,5 @@ def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
         context="",
         provider_config=None,
         http_client_config=None,
+        disable_thinking=True,
     )
