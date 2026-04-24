@@ -1,0 +1,12 @@
+[settings]
+env_shell_expand = true
+pipx.uvx = true
+
+[tools]
+uv = "latest"
+python = "latest"
+
+[tasks."github-copilot-commit:test"]
+description = "Run tests with uv and pytest"
+run = "uv run --with pytest pytest"
+
