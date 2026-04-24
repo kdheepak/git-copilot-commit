@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 import tempfile
 from contextlib import contextmanager
@@ -352,6 +353,15 @@ class GitRepository:
             )
         raise GitCommandError(f"Git command failed: git update-ref -d {ref}")
 
+    def update_ref(
+        self, ref: str, new_value: str, *, old_value: str | None = None
+    ) -> None:
+        """Update a ref to point at a new object id."""
+        args = ["update-ref", ref, new_value]
+        if old_value is not None:
+            args.append(old_value)
+        self._run_git_command(args)
+
     def create_alternate_index(self, from_ref: str = "HEAD") -> AlternateGitIndex:
         """Create a temporary git index initialized from the provided ref."""
         fd, index_path = tempfile.mkstemp(prefix="git-copilot-commit-", suffix=".index")
@@ -381,6 +391,15 @@ class GitRepository:
     def read_empty_tree(self, *, index: AlternateGitIndex) -> None:
         """Initialize an alternate index with an empty tree."""
         self._run_git_command(["read-tree", "--empty"], env=index.env)
+
+    def write_tree(self, *, env: Mapping[str, str] | None = None) -> str:
+        """Write the current index as a tree object and return its SHA."""
+        result = self._run_git_command(["write-tree"], env=env)
+        tree_sha = result.stdout.strip()
+        if tree_sha:
+            return tree_sha
+
+        raise GitCommandError("Git command failed: git write-tree")
 
     def apply_patch(
         self,
@@ -421,6 +440,110 @@ class GitRepository:
     ) -> None:
         """Validate whether a cached patch can be applied to an alternate index."""
         self.check_patch(patch, cached=True, env=index.env)
+
+    def edit_commit_message(
+        self,
+        message: str,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> str:
+        """Open git's configured editor with a starting message."""
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".txt",
+            delete=False,
+            encoding="utf-8",
+        ) as f:
+            f.write(message)
+            temp_path = Path(f.name)
+
+        try:
+            editor = self._run_git_command(
+                ["var", "GIT_EDITOR"], env=env
+            ).stdout.strip()
+            if not editor:
+                raise GitCommandError("Git command failed: git var GIT_EDITOR")
+
+            editor_command = f"{editor} {shlex.quote(str(temp_path))}"
+            try:
+                # Git editor configuration is shell syntax, so execute it the same way.
+                subprocess.run(
+                    editor_command,
+                    cwd=self.repo_path,
+                    timeout=self.timeout,
+                    check=True,
+                    env=self._build_env(env),
+                    shell=True,
+                )
+            except subprocess.CalledProcessError:
+                raise GitCommandError(f"Git editor failed: {editor_command}")
+            except subprocess.TimeoutExpired:
+                raise GitCommandError(f"Git editor timed out: {editor_command}")
+
+            edited_message = temp_path.read_text(encoding="utf-8").strip()
+            if edited_message:
+                return edited_message
+
+            raise GitCommandError("Commit message cannot be empty")
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def create_commit_object(
+        self,
+        tree_sha: str,
+        *,
+        message: str | None = None,
+        message_file: Path | None = None,
+        parent_refs: tuple[str, ...] = (),
+        env: Mapping[str, str] | None = None,
+    ) -> str:
+        """Create a commit object without updating refs."""
+        if (message is None) == (message_file is None):
+            raise ValueError("Exactly one of message or message_file is required")
+
+        args = ["commit-tree", tree_sha]
+        for parent_ref in parent_refs:
+            args.extend(["-p", parent_ref])
+
+        if message_file is not None:
+            args.extend(["-F", str(message_file)])
+            result = self._run_git_command(args, env=env)
+        else:
+            result = self._run_git_command(args, env=env, input_text=message)
+
+        commit_sha = result.stdout.strip()
+        if commit_sha:
+            return commit_sha
+
+        raise GitCommandError(f"Git command failed: git {' '.join(args)}")
+
+    def advance_head_to_commit(self, commit_sha: str) -> None:
+        """Move HEAD or the current branch to a commit without touching the real index."""
+        ref = self.get_symbolic_head_ref() or "HEAD"
+        self.update_ref(ref, commit_sha)
+
+    def create_commit_from_index(
+        self,
+        message: str,
+        *,
+        index: AlternateGitIndex,
+        use_editor: bool = False,
+    ) -> str:
+        """Create a commit from an alternate index using plumbing commands only."""
+        commit_message = message
+        if use_editor:
+            commit_message = self.edit_commit_message(message, env=index.env)
+
+        parent_refs = ("HEAD",) if self.has_commit("HEAD") else ()
+        tree_sha = self.write_tree(env=index.env)
+        commit_sha = self.create_commit_object(
+            tree_sha,
+            message=commit_message,
+            parent_refs=parent_refs,
+            env=index.env,
+        )
+        self.advance_head_to_commit(commit_sha)
+        return commit_sha
 
     def commit(
         self,

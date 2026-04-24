@@ -68,10 +68,9 @@ def test_alternate_index_commit_preserves_real_index_and_unstaged_changes(
 
         git_repo.check_patch_for_alternate_index(FIRST_PATCH, index=alternate_index)
         git_repo.apply_patch_to_alternate_index(FIRST_PATCH, index=alternate_index)
-        first_commit = git_repo.commit(
+        first_commit = git_repo.create_commit_from_index(
             "part 1",
-            env=alternate_index.env,
-            no_verify=True,
+            index=alternate_index,
         )
         assert len(first_commit) == 40
 
@@ -81,10 +80,9 @@ def test_alternate_index_commit_preserves_real_index_and_unstaged_changes(
 
         git_repo.check_patch_for_alternate_index(SECOND_PATCH, index=alternate_index)
         git_repo.apply_patch_to_alternate_index(SECOND_PATCH, index=alternate_index)
-        second_commit = git_repo.commit(
+        second_commit = git_repo.create_commit_from_index(
             "part 2",
-            env=alternate_index.env,
-            no_verify=True,
+            index=alternate_index,
         )
         assert len(second_commit) == 40
 
@@ -112,10 +110,9 @@ def test_alternate_index_supports_unborn_head(git_repo, git_repo_path) -> None:
     with git_repo.temporary_alternate_index() as alternate_index:
         git_repo.check_patch_for_alternate_index(staged_diff, index=alternate_index)
         git_repo.apply_patch_to_alternate_index(staged_diff, index=alternate_index)
-        commit_sha = git_repo.commit(
+        commit_sha = git_repo.create_commit_from_index(
             "docs: add readme",
-            env=alternate_index.env,
-            no_verify=True,
+            index=alternate_index,
         )
 
     assert len(commit_sha) == 40
@@ -125,6 +122,43 @@ def test_alternate_index_supports_unborn_head(git_repo, git_repo_path) -> None:
     assert not final_status.has_staged_changes
     assert not final_status.has_unstaged_changes
     assert git_repo.get_recent_commits(limit=1)[0][1] == "docs: add readme"
+
+
+def test_create_commit_from_index_uses_git_editor(
+    git_repo,
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    editor_script = git_repo_path / "editor.sh"
+    editor_script.write_text(
+        "#!/bin/sh\nprintf 'edited title\\n\\nbody\\n' > \"$1\"\n",
+        encoding="utf-8",
+    )
+    editor_script.chmod(0o755)
+    monkeypatch.setenv("GIT_EDITOR", str(editor_script))
+
+    file_path = git_repo_path / "README.md"
+    file_path.write_text("# Title\n", encoding="utf-8")
+    git_repo.stage_files(["README.md"])
+
+    staged_diff = git_repo.get_staged_diff(
+        extra_args=["--src-prefix=a/", "--dst-prefix=b/"]
+    )
+
+    with git_repo.temporary_alternate_index() as alternate_index:
+        git_repo.check_patch_for_alternate_index(staged_diff, index=alternate_index)
+        git_repo.apply_patch_to_alternate_index(staged_diff, index=alternate_index)
+        commit_sha = git_repo.create_commit_from_index(
+            "draft title",
+            index=alternate_index,
+            use_editor=True,
+        )
+
+    assert len(commit_sha) == 40
+    assert (
+        git_repo._run_git_command(["log", "-1", "--format=%B"]).stdout
+        == "edited title\n\nbody\n"
+    )
 
 
 def test_git_file_and_status_helper_properties() -> None:

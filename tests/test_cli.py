@@ -741,6 +741,47 @@ def test_execute_split_commit_plan_creates_multiple_commits(
     assert recent_messages == ["chore: update last line", "chore: update first line"]
 
 
+def test_execute_split_commit_plan_bypasses_git_hooks(
+    git_repo,
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.Confirm, "ask", Mock(return_value=True))
+    hooks_dir = git_repo_path / ".githooks"
+    hook_log = git_repo_path / "hook.log"
+    pre_commit_hook = hooks_dir / "pre-commit"
+    pre_commit_hook.write_text(
+        "#!/bin/sh\necho hook-ran >> hook.log\n",
+        encoding="utf-8",
+    )
+    pre_commit_hook.chmod(0o755)
+
+    file_path = git_repo_path / "file.txt"
+    file_path.write_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n", encoding="utf-8")
+    git_repo.stage_files(["file.txt"])
+    git_repo.commit("init", no_verify=True)
+
+    file_path.write_text("A\nb\nc\nd\ne\nf\ng\nh\ni\nJ\n", encoding="utf-8")
+    git_repo.stage_files(["file.txt"])
+    patch_units = tuple(
+        extract_patch_units(git_repo.get_staged_diff(extra_args=SPLIT_DIFF_ARGS))
+    )
+    prepared_commits = [
+        PreparedSplitCommit(
+            message="chore: update first line",
+            patch_units=(patch_units[0],),
+        ),
+        PreparedSplitCommit(
+            message="chore: update last line",
+            patch_units=(patch_units[1],),
+        ),
+    ]
+
+    execute_split_commit_plan(git_repo, prepared_commits, yes=True)
+
+    assert not hook_log.exists()
+
+
 def test_execute_split_commit_plan_rolls_back_partial_commits_on_interrupt(
     git_repo,
     git_repo_path,
@@ -771,22 +812,22 @@ def test_execute_split_commit_plan_rolls_back_partial_commits_on_interrupt(
         ),
     ]
 
+    original_create_commit_from_index = git_repo.create_commit_from_index
     commit_attempts = 0
 
-    def interrupting_commit(repo, message, use_editor=False, env=None):
+    def interrupting_commit(message, *, index, use_editor=False):
         nonlocal commit_attempts
         commit_attempts += 1
         if commit_attempts == 2:
             raise KeyboardInterrupt()
 
-        return commit_with_retry_no_verify(
-            repo,
+        return original_create_commit_from_index(
             message,
+            index=index,
             use_editor=use_editor,
-            env=env,
         )
 
-    monkeypatch.setattr(cli, "commit_with_retry_no_verify", interrupting_commit)
+    monkeypatch.setattr(git_repo, "create_commit_from_index", interrupting_commit)
 
     with pytest.raises(KeyboardInterrupt):
         execute_split_commit_plan(git_repo, prepared_commits, yes=True)
@@ -942,22 +983,22 @@ def test_execute_split_commit_plan_rolls_back_partial_initial_commits_on_interru
         ),
     ]
 
+    original_create_commit_from_index = git_repo.create_commit_from_index
     commit_attempts = 0
 
-    def interrupting_commit(repo, message, use_editor=False, env=None):
+    def interrupting_commit(message, *, index, use_editor=False):
         nonlocal commit_attempts
         commit_attempts += 1
         if commit_attempts == 2:
             raise KeyboardInterrupt()
 
-        return commit_with_retry_no_verify(
-            repo,
+        return original_create_commit_from_index(
             message,
+            index=index,
             use_editor=use_editor,
-            env=env,
         )
 
-    monkeypatch.setattr(cli, "commit_with_retry_no_verify", interrupting_commit)
+    monkeypatch.setattr(git_repo, "create_commit_from_index", interrupting_commit)
 
     with pytest.raises(KeyboardInterrupt):
         execute_split_commit_plan(git_repo, prepared_commits, yes=True)

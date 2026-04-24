@@ -841,14 +841,17 @@ def execute_split_commit_plan(
                     )
                     raise typer.Exit(1)
 
-                commit_shas.append(
-                    commit_with_retry_no_verify(
-                        repo,
-                        prepared_commit.message,
-                        use_editor=use_editor,
-                        env=alternate_index.env,
+                try:
+                    commit_shas.append(
+                        repo.create_commit_from_index(
+                            prepared_commit.message,
+                            index=alternate_index,
+                            use_editor=use_editor,
+                        )
                     )
-                )
+                except GitError as exc:
+                    console.print(f"[red]Failed to create commit {index}: {exc}[/red]")
+                    raise typer.Exit(1)
     except BaseException:
         try:
             if execution_state.original_head_sha is not None:
