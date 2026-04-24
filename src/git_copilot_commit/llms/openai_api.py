@@ -120,6 +120,7 @@ def ask(
     configured_default_model_path: Path | None = None,
     provider_label: str = "OpenAI-compatible provider",
     http_client_config: HttpClientConfig | None = None,
+    disable_thinking: bool = False,
 ) -> str:
     selected_model = ensure_model_ready(
         base_url=base_url,
@@ -140,6 +141,7 @@ def ask(
                 request_headers(api_key, accept="text/event-stream"),
                 model_id=selected_model.id,
                 prompt=prompt,
+                disable_thinking=disable_thinking,
             )
 
         return llm.chat_completion_request(
@@ -148,6 +150,7 @@ def ask(
             request_headers(api_key),
             model_id=selected_model.id,
             prompt=prompt,
+            disable_thinking=disable_thinking,
         )
 
 
