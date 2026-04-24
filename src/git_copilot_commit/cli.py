@@ -371,6 +371,7 @@ def ask_llm_with_system_prompt(
     model: str | None = None,
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = True,
 ) -> str:
     """Send a prepared prompt to the selected LLM provider."""
     return providers.ask(
@@ -386,6 +387,7 @@ def ask_llm_with_system_prompt(
         provider_config=provider_config,
         model=normalize_model_name(model),
         http_client_config=http_client_config,
+        disable_thinking=disable_thinking,
     )
 
 
@@ -394,6 +396,7 @@ def generate_commit_message_for_prompt(
     model: str | None = None,
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = True,
 ) -> str:
     """Generate a conventional commit message from a prepared prompt."""
     return ask_llm_with_system_prompt(
@@ -402,6 +405,7 @@ def generate_commit_message_for_prompt(
         model=model,
         provider_config=provider_config,
         http_client_config=http_client_config,
+        disable_thinking=disable_thinking,
     )
 
 
@@ -435,6 +439,7 @@ def generate_commit_message_for_status(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = True,
 ) -> str:
     """Generate a commit message for a staged status snapshot."""
     full_prompt = build_commit_message_prompt(status, context=context)
@@ -444,6 +449,7 @@ def generate_commit_message_for_status(
             model=model,
             provider_config=provider_config,
             http_client_config=http_client_config,
+            disable_thinking=disable_thinking,
         )
     except llm.LLMError as exc:
         if not should_retry_with_compact_prompt(exc):
@@ -462,6 +468,7 @@ def generate_commit_message_for_status(
         model=model,
         provider_config=provider_config,
         http_client_config=http_client_config,
+        disable_thinking=disable_thinking,
     )
 
 
@@ -549,6 +556,7 @@ def request_commit_message(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = True,
 ) -> str:
     """Request a commit message for the provided staged state."""
     try:
@@ -561,6 +569,7 @@ def request_commit_message(
                 context=context,
                 provider_config=provider_config,
                 http_client_config=http_client_config,
+                disable_thinking=disable_thinking,
             )
     except llm.LLMError as exc:
         print_llm_error("Could not generate a commit message", exc)
@@ -576,6 +585,7 @@ def request_split_commit_plan(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = True,
 ) -> SplitCommitPlan:
     """Request and validate a split-commit plan for the staged patch units."""
     planner_system_prompt = load_named_prompt(SPLIT_COMMIT_PLANNER_PROMPT_FILENAME)
@@ -596,6 +606,7 @@ def request_split_commit_plan(
                 model=model,
                 provider_config=provider_config,
                 http_client_config=http_client_config,
+                disable_thinking=disable_thinking,
             )
     except llm.LLMError as exc:
         if not should_retry_with_compact_prompt(exc):
@@ -629,6 +640,7 @@ def request_split_commit_plan(
                 model=model,
                 provider_config=provider_config,
                 http_client_config=http_client_config,
+                disable_thinking=disable_thinking,
             )
     except llm.LLMError as exc:
         print_llm_error("Could not generate a split commit plan", exc)
@@ -648,6 +660,7 @@ def request_split_commit_messages(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = True,
 ) -> list[PreparedSplitCommit]:
     """Generate commit messages for each planned split-commit group."""
     try:
@@ -665,6 +678,7 @@ def request_split_commit_messages(
                     context=context,
                     provider_config=provider_config,
                     http_client_config=http_client_config,
+                    disable_thinking=disable_thinking,
                 )
 
             prepared_commits.append(
@@ -858,6 +872,7 @@ def handle_single_commit_flow(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = True,
 ) -> None:
     """Generate, display, and execute the single-commit flow."""
     commit_message = request_commit_message(
@@ -866,6 +881,7 @@ def handle_single_commit_flow(
         context=context,
         provider_config=provider_config,
         http_client_config=http_client_config,
+        disable_thinking=disable_thinking,
     )
     display_commit_message(commit_message)
 
@@ -883,6 +899,7 @@ def handle_split_commit_flow(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
+    disable_thinking: bool = True,
 ) -> None:
     """Generate, display, and execute the split-commit flow."""
     patch_units = tuple(
@@ -901,6 +918,7 @@ def handle_split_commit_flow(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
+            disable_thinking=disable_thinking,
         )
         return
 
@@ -916,6 +934,7 @@ def handle_split_commit_flow(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
+            disable_thinking=disable_thinking,
         )
         return
 
@@ -938,6 +957,7 @@ def handle_split_commit_flow(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
+            disable_thinking=disable_thinking,
         )
     except SplitPlanningError as exc:
         console.print(
@@ -952,6 +972,7 @@ def handle_split_commit_flow(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
+            disable_thinking=disable_thinking,
         )
         return
 
@@ -969,6 +990,7 @@ def handle_split_commit_flow(
         context=context,
         provider_config=provider_config,
         http_client_config=http_client_config,
+        disable_thinking=disable_thinking,
     )
     prepared_commits = order_prepared_split_commits(prepared_commits)
 
@@ -1008,7 +1030,7 @@ def authenticate(
     ] = False,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
-    native_tls: NativeTlsOption = False,
+    native_tls: NativeTlsOption = True,
 ):
     """Authenticate with GitHub Copilot and cache credentials locally."""
     print_cli_banner()
@@ -1035,7 +1057,7 @@ def summary(
     api_key: ApiKeyOption = None,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
-    native_tls: NativeTlsOption = False,
+    native_tls: NativeTlsOption = True,
 ):
     """Show the configured LLM provider summary."""
     print_cli_banner()
@@ -1073,7 +1095,7 @@ def models_command(
     ] = None,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
-    native_tls: NativeTlsOption = False,
+    native_tls: NativeTlsOption = True,
 ):
     """List available models for the configured LLM provider."""
     print_cli_banner()
@@ -1139,12 +1161,22 @@ def commit(
             help="Optional user-provided context to guide commit message",
         ),
     ] = "",
+    disable_thinking: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name="--disable-thinking",
+            negative="--enable-thinking",
+            help=(
+                "Disable or minimize reasoning/thinking tokens for commit-message requests."
+            ),
+        ),
+    ] = True,
     provider: ProviderOption = None,
     base_url: BaseUrlOption = None,
     api_key: ApiKeyOption = None,
     ca_bundle: CaBundleOption = None,
     insecure: InsecureOption = False,
-    native_tls: NativeTlsOption = False,
+    native_tls: NativeTlsOption = True,
 ):
     """
     Generate commit message based on changes in the current git repository and commit them.
@@ -1212,6 +1244,7 @@ def commit(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
+            disable_thinking=disable_thinking,
         )
         return
 
@@ -1223,6 +1256,7 @@ def commit(
         context=context,
         provider_config=provider_config,
         http_client_config=http_client_config,
+        disable_thinking=disable_thinking,
     )
 
 
