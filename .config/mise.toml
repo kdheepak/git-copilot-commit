@@ -64,7 +64,7 @@ arg "[type]" help="Version bump type" default="patch" {
 run = """
 set -euo pipefail
 
-new_version=$(mise run next-version "${usage_type?}")
+new_version=$(mise run git-copilot-commit:next-version "${usage_type?}")
 echo "New version: $new_version"
 
 git commit --allow-empty -m "chore(build): Bump version to $new_version"
