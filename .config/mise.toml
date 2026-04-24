@@ -71,7 +71,7 @@ git commit --allow-empty -m "chore(build): Bump version to $new_version"
 git tag "$new_version"
 
 echo "✓ Created commit and tag for $new_version"
-echo "  Run: 'mise run release $new_version'"
+echo "  Run: 'mise run git-copilot-commit:release $new_version'"
 """
 
 [tasks."git-copilot-commit:release"]
