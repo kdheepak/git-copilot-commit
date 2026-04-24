@@ -155,6 +155,7 @@ def test_generate_commit_message_for_status_normalizes_model_prefix(
     assert mock_ask.call_count == 1
     assert mock_ask.call_args.kwargs["model"] == "gpt-5.4"
     assert mock_ask.call_args.kwargs["disable_thinking"] is True
+    assert mock_ask.call_args.kwargs["max_tokens"] == 1024
     rendered_prompt = mock_ask.call_args.args[0]
     assert "system prompt" in rendered_prompt
     assert "Prefer feat scope" in rendered_prompt
@@ -188,6 +189,8 @@ def test_generate_commit_message_for_status_retries_without_diff_on_context_over
     assert mock_ask.call_count == 2
     assert mock_ask.call_args_list[0].kwargs["disable_thinking"] is True
     assert mock_ask.call_args_list[1].kwargs["disable_thinking"] is True
+    assert mock_ask.call_args_list[0].kwargs["max_tokens"] == 1024
+    assert mock_ask.call_args_list[1].kwargs["max_tokens"] == 1024
     first_prompt = mock_ask.call_args_list[0].args[0]
     second_prompt = mock_ask.call_args_list[1].args[0]
     assert "`git diff --staged`" in first_prompt
@@ -256,6 +259,8 @@ def test_request_split_commit_plan_retries_without_patches_on_context_overflow(
     assert mock_ask.call_count == 2
     assert mock_ask.call_args_list[0].kwargs["disable_thinking"] is True
     assert mock_ask.call_args_list[1].kwargs["disable_thinking"] is True
+    assert mock_ask.call_args_list[0].kwargs["max_tokens"] == 1024
+    assert mock_ask.call_args_list[1].kwargs["max_tokens"] == 1024
     first_prompt = mock_ask.call_args_list[0].args[1]
     second_prompt = mock_ask.call_args_list[1].args[1]
     assert "```diff" in first_prompt
@@ -445,7 +450,7 @@ def test_summary_command_defaults_to_native_tls_and_can_disable_it(
             "--provider",
             "openai",
             "--base-url",
-            "http://example.com/v1",
+            "http://example.com/v1/models",
         ],
     )
     disabled_result = runner.invoke(
@@ -455,7 +460,7 @@ def test_summary_command_defaults_to_native_tls_and_can_disable_it(
             "--provider",
             "openai",
             "--base-url",
-            "http://example.com/v1",
+            "http://example.com/v1/models",
             "--no-native-tls",
         ],
     )
@@ -785,11 +790,12 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
     assert ensure_model_ready.call_args.kwargs["provider_config"] == (
         cli.providers.ProviderConfig(
             provider="openai",
-            base_url="http://example.com:8001/v1",
+            base_url="http://example.com:8001/v1/chat/completions",
             api_key=None,
         )
     )
     assert request_commit_message.call_args.kwargs["disable_thinking"] is True
+    assert request_commit_message.call_args.kwargs["max_tokens"] == 1024
     assert repo.get_recent_commits(limit=1)[0][1] == (
         "chore: use openai-compatible provider"
     )
@@ -833,6 +839,48 @@ def test_commit_command_can_enable_thinking(
 
     assert result.exit_code == 0
     assert request_commit_message.call_args.kwargs["disable_thinking"] is False
+    assert request_commit_message.call_args.kwargs["max_tokens"] == 1024
+
+
+def test_commit_command_accepts_max_tokens(
+    git_repo_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = cli.GitRepository(git_repo_path)
+    file_path = git_repo_path / "example.txt"
+    file_path.write_text("v1\n", encoding="utf-8")
+    repo.stage_files(["example.txt"])
+    repo.commit("chore: init", no_verify=True)
+    file_path.write_text("v2\n", encoding="utf-8")
+
+    monkeypatch.chdir(git_repo_path)
+    monkeypatch.setattr(cli, "ensure_copilot_authentication", Mock(return_value=None))
+    monkeypatch.setattr(
+        cli.providers,
+        "ensure_model_ready",
+        Mock(
+            return_value=llm.Model(
+                id="gpt-5.4",
+                name="gpt-5.4",
+            )
+        ),
+    )
+    request_commit_message = Mock(return_value="chore: set max tokens")
+    monkeypatch.setattr(cli, "request_commit_message", request_commit_message)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "commit",
+            "--all",
+            "--yes",
+            "--max-tokens",
+            "4096",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert request_commit_message.call_args.kwargs["max_tokens"] == 4096
 
 
 def test_execute_split_commit_plan_creates_multiple_commits(
@@ -1289,6 +1337,7 @@ def test_handle_split_commit_flow_auto_mode_always_requests_split_planning(
         provider_config=None,
         http_client_config=None,
         disable_thinking=True,
+        max_tokens=1024,
     )
 
 
@@ -1426,6 +1475,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
         provider_config=None,
         http_client_config=None,
         disable_thinking=True,
+        max_tokens=1024,
     )
     request_messages.assert_called_once_with(
         split_plan,
@@ -1435,6 +1485,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
         provider_config=None,
         http_client_config=None,
         disable_thinking=True,
+        max_tokens=1024,
     )
     display_plan.assert_called_once_with(prepared_commits)
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
@@ -1504,6 +1555,7 @@ def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
         provider_config=None,
         http_client_config=None,
         disable_thinking=True,
+        max_tokens=1024,
     )
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
 
@@ -1715,4 +1767,5 @@ def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
         provider_config=None,
         http_client_config=None,
         disable_thinking=True,
+        max_tokens=1024,
     )
