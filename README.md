@@ -12,7 +12,8 @@ any OpenAI-compatible LLM.
 ## Features
 
 - Generates commit messages based on your staged changes
-- Supports GitHub Copilot and OpenAI-compatible `/v1/models` + `/v1/chat/completions` APIs
+- Supports GitHub Copilot and OpenAI-compatible `/v1/chat/completions`, `/v1/responses`,
+  and `/v1/models` endpoints
 - Supports multiple LLM models: GPT, Claude, Gemini, local models, and more
 - Allows editing of generated messages before committing
 - Follows the [Conventional Commits](https://www.conventionalcommits.org/) standard
@@ -83,24 +84,27 @@ git-copilot-commit --help
 
 ### OpenAI-compatible provider
 
-1. Point the CLI at your server.
+1. List models by pointing the CLI at your server's `/models` endpoint.
 
    ```bash
    uvx git-copilot-commit models \
      --provider openai \
-     --base-url http://127.0.0.1:11434/v1
+     --base-url http://127.0.0.1:11434/v1/models
    ```
 
-2. Generate and commit.
+2. Generate and commit by pointing the CLI at the generation endpoint you want to use.
 
    ```bash
    uvx git-copilot-commit commit \
      --provider openai \
-     --base-url http://127.0.0.1:11434/v1 \
+     --base-url http://127.0.0.1:11434/v1/chat/completions \
      --model your-model-id
    ```
 
    If your server requires an API key, also pass `--api-key ...` or set `OPENAI_API_KEY`.
+
+   OpenAI-compatible generation URLs must end with `/chat/completions` or `/responses`.
+   Model listing URLs must end with `/models`.
 
 ## Usage
 
@@ -109,28 +113,39 @@ git-copilot-commit --help
 ```bash
 $ uvx git-copilot-commit commit --help
 
- Usage: git-copilot-commit commit [OPTIONS]
+ Usage: git-copilot-commit commit [ARGS]
 
  Generate commit message based on changes in the current git repository and commit them.
 
-╭─ Options ────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --all         -a                               Stage all files before committing                         │
-│ --split                                        Split staged hunks into multiple commits automatically.   │
-│                                                Pass `--split=N` to express a preference for N commits.   │
-│ --model       -m                     MODEL_ID  Model to use for generating commit message                │
-│ --yes         -y                               Automatically accept the generated commit message         │
-│ --context     -c                     TEXT      Optional user-provided context to guide commit message    │
-│ --provider                           TEXT      LLM provider to use: copilot or openai                   │
-│ --base-url                           URL       Base URL for an OpenAI-compatible provider                │
-│ --api-key                            TEXT      API key for an OpenAI-compatible provider                 │
-│ --ca-bundle                          PATH      Path to a custom CA bundle (PEM)                          │
-│ --insecure                                     Disable SSL certificate verification.                     │
-│ --native-tls      --no-native-tls              Use the OS's native certificate store via 'truststore'    │
-│                                                for httpx instead of the Python bundle. Ignored if        │
-│                                                --ca-bundle or --insecure is used.                        │
-│                                                [default: no-native-tls]                                  │
-│ --help                                         Show this message and exit.                               │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+│ ALL --all -a --no-all     Stage all files before committing [default: False] │
+│ SPLIT --split --no-split  Split staged hunks into multiple commits           │
+│                           automatically. Pass --split=N to express a         │
+│                           preference for N commits. [default: False]         │
+│ MODEL --model -m          Model to use for generating commit message         │
+│ YES --yes -y --no-yes     Automatically accept the generated commit message  │
+│                           [default: False]                                   │
+│ CONTEXT --context -c      Optional user-provided context to guide commit     │
+│                           message [default: ""]                              │
+│ DISABLE-THINKING          Disable or minimize reasoning/thinking tokens for  │
+│   --disable-thinking      commit-message requests. [default: True]           │
+│   --enable-thinking                                                          │
+│ MAX-TOKENS --max-tokens   Maximum output tokens for LLM generation.          │
+│                           [default: 1024]                                    │
+│ PROVIDER --provider       LLM provider to use: copilot or openai.            │
+│ BASE-URL --base-url       Endpoint URL for an OpenAI-compatible provider,    │
+│                           for example                                        │
+│                           http://127.0.0.1:11434/v1/chat/completions.        │
+│ API-KEY --api-key         API key for an OpenAI-compatible provider. Omit    │
+│                           when the server does not require one.              │
+│ CA-BUNDLE --ca-bundle     Path to a custom CA bundle (PEM)                   │
+│ INSECURE --insecure       Disable SSL certificate verification. [default:    │
+│   --no-insecure           False]                                             │
+│ NATIVE-TLS --native-tls   Use the OS's native certificate store via          │
+│   --no-native-tls         'truststore' for httpx instead of the Python       │
+│                           bundle. Ignored if --ca-bundle or --insecure is    │
+│                           used. [default: True]                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Examples
@@ -158,7 +173,7 @@ Use a local OpenAI-compatible server:
 ```bash
 uvx git-copilot-commit commit \
   --provider openai \
-  --base-url http://127.0.0.1:11434/v1 \
+  --base-url http://127.0.0.1:11434/v1/chat/completions \
   --model your-model-id
 ```
 
@@ -174,6 +189,35 @@ uvx git-copilot-commit commit \
   --provider openai \
   --base-url http://example.com:8002/v1/chat/completions \
   --model Qwen/Qwen3.6-35B-A3B
+```
+
+Use the Responses API endpoint:
+
+```bash
+uvx git-copilot-commit commit \
+  --provider openai \
+  --base-url http://example.com:8002/v1/responses \
+  --model your-model-id
+```
+
+Increase the output token budget:
+
+```bash
+uvx git-copilot-commit commit --max-tokens 4096
+```
+
+Thinking/reasoning is disabled or minimized by default for commit-message requests. To let the
+selected model use its default thinking behavior, pass:
+
+```bash
+uvx git-copilot-commit commit --enable-thinking
+```
+
+TLS uses the operating system's native certificate store by default. To use Python's default
+certificate bundle instead, pass:
+
+```bash
+uvx git-copilot-commit commit --no-native-tls
 ```
 
 Split staged hunks into separate commits:
@@ -234,7 +278,7 @@ You can also set provider defaults with environment variables:
 
 ```bash
 export GIT_COPILOT_COMMIT_PROVIDER=openai
-export GIT_COPILOT_COMMIT_BASE_URL=http://127.0.0.1:11434/v1
+export GIT_COPILOT_COMMIT_BASE_URL=http://127.0.0.1:11434/v1/chat/completions
 export GIT_COPILOT_COMMIT_API_KEY=...
 export OPENAI_API_KEY=...
 git ai-commit --provider openai --model your-model-id
@@ -244,7 +288,7 @@ For example:
 
 ```bash
 export GIT_COPILOT_COMMIT_PROVIDER=openai
-export GIT_COPILOT_COMMIT_BASE_URL=http://example.com:8001/v1
+export GIT_COPILOT_COMMIT_BASE_URL=http://example.com:8001/v1/chat/completions
 git ai-commit --model openai/gpt-oss-120b
 ```
 
