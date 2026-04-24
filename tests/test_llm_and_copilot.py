@@ -367,6 +367,7 @@ def test_chat_completion_request_disables_qwen_thinking() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         request_payload = json.loads(request.content.decode("utf-8"))
         assert request_payload["model"] == "Qwen/Qwen3.6-35B-A3B"
+        assert request_payload["max_tokens"] == 256
         assert request_payload["reasoning_effort"] == "none"
         assert request_payload["chat_template_kwargs"] == {
             "enable_thinking": False,
@@ -387,6 +388,7 @@ def test_chat_completion_request_disables_qwen_thinking() -> None:
             model_id="Qwen/Qwen3.6-35B-A3B",
             prompt="Write a commit message",
             disable_thinking=True,
+            max_tokens=256,
         )
 
     assert response == "feat: disable thinking"
@@ -401,6 +403,10 @@ def test_disable_thinking_options_cover_major_model_families() -> None:
         model_id="gpt-5.4",
         api_surface="chat_completions",
     ) == {"reasoning_effort": "minimal"}
+    assert llm.disable_thinking_options(
+        model_id="gpt-5.3-codex",
+        api_surface="chat_completions",
+    ) == {"reasoning_effort": "none"}
     assert llm.disable_thinking_options(
         model_id="openai/gpt-oss-120b",
         api_surface="chat_completions",
@@ -423,12 +429,17 @@ def test_disable_thinking_options_cover_major_model_families() -> None:
         model_id="gpt-5.4",
         api_surface="responses",
     ) == {"reasoning": {"effort": "minimal"}}
+    assert llm.disable_thinking_options(
+        model_id="gpt-5.3-codex",
+        api_surface="responses",
+    ) == {"reasoning": {"effort": "none"}}
 
 
 def test_responses_completion_request_disables_gpt5_thinking() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         request_payload = json.loads(request.content.decode("utf-8"))
         assert request_payload["model"] == "gpt-5.4"
+        assert request_payload["max_output_tokens"] == 2048
         assert request_payload["reasoning"] == {"effort": "minimal"}
         return httpx.Response(
             200,
@@ -450,9 +461,48 @@ def test_responses_completion_request_disables_gpt5_thinking() -> None:
             model_id="gpt-5.4",
             prompt="Write a commit message",
             disable_thinking=True,
+            max_tokens=2048,
         )
 
     assert response == "feat: disable thinking"
+
+
+def test_responses_completion_request_reports_reasoning_token_limit() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=(
+                "event: response.incomplete\n"
+                "data: {"
+                '"response":{'
+                '"status":"incomplete",'
+                '"incomplete_details":{"reason":"max_output_tokens"},'
+                '"output":[{"type":"reasoning","content":['
+                '{"type":"reasoning_text","text":"thinking"}'
+                "]}]"
+                "}"
+                "}\n\n"
+            ),
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(llm.LLMError) as error:
+            llm.responses_completion_request(
+                client,
+                "https://example.com/v1/responses",
+                {},
+                model_id="Qwen/Qwen3.6-35B-A3B",
+                prompt="Write a split commit plan",
+                disable_thinking=True,
+                max_tokens=1024,
+            )
+
+    message = str(error.value)
+    assert "max_output_tokens" in message
+    assert "`--max-tokens`" in message
+    assert "/chat/completions" in message
 
 
 def test_request_json_retries_rate_limits_and_honors_retry_after(
