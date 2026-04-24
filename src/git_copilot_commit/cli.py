@@ -81,8 +81,8 @@ BaseUrlOption = Annotated[
     cyclopts.Parameter(
         name="--base-url",
         help=(
-            "Base URL for an OpenAI-compatible provider, for example "
-            "http://127.0.0.1:11434/v1."
+            "Endpoint URL for an OpenAI-compatible provider, for example "
+            "http://127.0.0.1:11434/v1/chat/completions."
         ),
     ),
 ]
@@ -372,6 +372,7 @@ def ask_llm_with_system_prompt(
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = True,
+    max_tokens: int = 1024,
 ) -> str:
     """Send a prepared prompt to the selected LLM provider."""
     return providers.ask(
@@ -388,6 +389,7 @@ def ask_llm_with_system_prompt(
         model=normalize_model_name(model),
         http_client_config=http_client_config,
         disable_thinking=disable_thinking,
+        max_tokens=max_tokens,
     )
 
 
@@ -397,6 +399,7 @@ def generate_commit_message_for_prompt(
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = True,
+    max_tokens: int = 1024,
 ) -> str:
     """Generate a conventional commit message from a prepared prompt."""
     return ask_llm_with_system_prompt(
@@ -406,6 +409,7 @@ def generate_commit_message_for_prompt(
         provider_config=provider_config,
         http_client_config=http_client_config,
         disable_thinking=disable_thinking,
+        max_tokens=max_tokens,
     )
 
 
@@ -440,6 +444,7 @@ def generate_commit_message_for_status(
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = True,
+    max_tokens: int = 1024,
 ) -> str:
     """Generate a commit message for a staged status snapshot."""
     full_prompt = build_commit_message_prompt(status, context=context)
@@ -450,6 +455,7 @@ def generate_commit_message_for_status(
             provider_config=provider_config,
             http_client_config=http_client_config,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
     except llm.LLMError as exc:
         if not should_retry_with_compact_prompt(exc):
@@ -469,6 +475,7 @@ def generate_commit_message_for_status(
         provider_config=provider_config,
         http_client_config=http_client_config,
         disable_thinking=disable_thinking,
+        max_tokens=max_tokens,
     )
 
 
@@ -557,6 +564,7 @@ def request_commit_message(
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = True,
+    max_tokens: int = 1024,
 ) -> str:
     """Request a commit message for the provided staged state."""
     try:
@@ -570,6 +578,7 @@ def request_commit_message(
                 provider_config=provider_config,
                 http_client_config=http_client_config,
                 disable_thinking=disable_thinking,
+                max_tokens=max_tokens,
             )
     except llm.LLMError as exc:
         print_llm_error("Could not generate a commit message", exc)
@@ -586,6 +595,7 @@ def request_split_commit_plan(
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = True,
+    max_tokens: int = 1024,
 ) -> SplitCommitPlan:
     """Request and validate a split-commit plan for the staged patch units."""
     planner_system_prompt = load_named_prompt(SPLIT_COMMIT_PLANNER_PROMPT_FILENAME)
@@ -607,6 +617,7 @@ def request_split_commit_plan(
                 provider_config=provider_config,
                 http_client_config=http_client_config,
                 disable_thinking=disable_thinking,
+                max_tokens=max_tokens,
             )
     except llm.LLMError as exc:
         if not should_retry_with_compact_prompt(exc):
@@ -641,6 +652,7 @@ def request_split_commit_plan(
                 provider_config=provider_config,
                 http_client_config=http_client_config,
                 disable_thinking=disable_thinking,
+                max_tokens=max_tokens,
             )
     except llm.LLMError as exc:
         print_llm_error("Could not generate a split commit plan", exc)
@@ -661,6 +673,7 @@ def request_split_commit_messages(
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = True,
+    max_tokens: int = 1024,
 ) -> list[PreparedSplitCommit]:
     """Generate commit messages for each planned split-commit group."""
     try:
@@ -679,6 +692,7 @@ def request_split_commit_messages(
                     provider_config=provider_config,
                     http_client_config=http_client_config,
                     disable_thinking=disable_thinking,
+                    max_tokens=max_tokens,
                 )
 
             prepared_commits.append(
@@ -873,6 +887,7 @@ def handle_single_commit_flow(
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = True,
+    max_tokens: int = 1024,
 ) -> None:
     """Generate, display, and execute the single-commit flow."""
     commit_message = request_commit_message(
@@ -882,6 +897,7 @@ def handle_single_commit_flow(
         provider_config=provider_config,
         http_client_config=http_client_config,
         disable_thinking=disable_thinking,
+        max_tokens=max_tokens,
     )
     display_commit_message(commit_message)
 
@@ -900,6 +916,7 @@ def handle_split_commit_flow(
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = True,
+    max_tokens: int = 1024,
 ) -> None:
     """Generate, display, and execute the split-commit flow."""
     patch_units = tuple(
@@ -919,6 +936,7 @@ def handle_split_commit_flow(
             provider_config=provider_config,
             http_client_config=http_client_config,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
         return
 
@@ -935,6 +953,7 @@ def handle_split_commit_flow(
             provider_config=provider_config,
             http_client_config=http_client_config,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
         return
 
@@ -958,6 +977,7 @@ def handle_split_commit_flow(
             provider_config=provider_config,
             http_client_config=http_client_config,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
     except SplitPlanningError as exc:
         console.print(
@@ -973,6 +993,7 @@ def handle_split_commit_flow(
             provider_config=provider_config,
             http_client_config=http_client_config,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
         return
 
@@ -991,6 +1012,7 @@ def handle_split_commit_flow(
         provider_config=provider_config,
         http_client_config=http_client_config,
         disable_thinking=disable_thinking,
+        max_tokens=max_tokens,
     )
     prepared_commits = order_prepared_split_commits(prepared_commits)
 
@@ -1171,6 +1193,14 @@ def commit(
             ),
         ),
     ] = True,
+    max_tokens: Annotated[
+        int,
+        cyclopts.Parameter(
+            name="--max-tokens",
+            help=("Maximum output tokens for LLM generation."),
+            validator=cyclopts.validators.Number(gte=1),
+        ),
+    ] = 1024,
     provider: ProviderOption = None,
     base_url: BaseUrlOption = None,
     api_key: ApiKeyOption = None,
@@ -1245,6 +1275,7 @@ def commit(
             provider_config=provider_config,
             http_client_config=http_client_config,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
         return
 
@@ -1257,6 +1288,7 @@ def commit(
         provider_config=provider_config,
         http_client_config=http_client_config,
         disable_thinking=disable_thinking,
+        max_tokens=max_tokens,
     )
 
 

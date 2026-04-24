@@ -506,6 +506,7 @@ def complete_text_prompt(
     model: Model,
     prompt: str,
     disable_thinking: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
     api_surface = llm.infer_api_surface(model)
     if api_surface == "chat_completions":
@@ -518,6 +519,7 @@ def complete_text_prompt(
             model_id=model.id,
             prompt=prompt,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
     if api_surface == "responses":
         return llm.responses_completion_request(
@@ -531,6 +533,7 @@ def complete_text_prompt(
             model_id=model.id,
             prompt=prompt,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
 
     raise LLMError(
@@ -786,6 +789,7 @@ def ask(
     configured_default_model_path: Path | None = None,
     http_client_config: HttpClientConfig | None = None,
     disable_thinking: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
     def run(client) -> str:
         credentials = ensure_fresh_credentials(client)
@@ -803,6 +807,7 @@ def ask(
             model=selected_model,
             prompt=prompt,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
 
     return _with_reauthentication(run, http_client_config=http_client_config)

@@ -79,16 +79,11 @@ def normalize_openai_base_url(value: str | None) -> str | None:
         return None
 
     normalized = normalized.rstrip("/")
-    for suffix in ("/chat/completions", "/responses", "/models"):
-        if normalized.endswith(suffix):
-            normalized = normalized[: -len(suffix)]
-            break
-
     parsed = urlparse(normalized)
     if not parsed.scheme or not parsed.netloc:
         raise llm.LLMError(
-            "OpenAI-compatible base URL must include a scheme and host, for example "
-            "`http://127.0.0.1:11434/v1`."
+            "OpenAI-compatible URL must include a scheme and host, for example "
+            "`http://127.0.0.1:11434/v1/chat/completions`."
         )
 
     return normalized.rstrip("/")
@@ -227,8 +222,8 @@ def resolve_provider_config(
         resolved_base_url = normalize_openai_base_url(os.getenv("OPENAI_BASE_URL"))
     if resolved_base_url is None:
         raise llm.LLMError(
-            "OpenAI-compatible provider requires a base URL. Pass "
-            "`--base-url http://127.0.0.1:11434/v1` or set "
+            "OpenAI-compatible provider requires an endpoint URL. Pass "
+            "`--base-url http://127.0.0.1:11434/v1/chat/completions` or set "
             "`GIT_COPILOT_COMMIT_BASE_URL`."
         )
 
@@ -317,6 +312,7 @@ def ask(
     model: str | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
     disable_thinking: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
     resolved_provider = provider_config or resolve_provider_config()
     default_model, config_file = load_default_model()
@@ -329,6 +325,7 @@ def ask(
             configured_default_model_path=config_file,
             http_client_config=http_client_config,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
 
     if resolved_provider.base_url is None:
@@ -344,6 +341,7 @@ def ask(
         provider_label=resolved_provider.display_name,
         http_client_config=http_client_config,
         disable_thinking=disable_thinking,
+        max_tokens=max_tokens,
     )
 
 

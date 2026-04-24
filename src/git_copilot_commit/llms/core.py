@@ -477,6 +477,8 @@ def disable_thinking_options(
     normalized = model_id.lower()
 
     if api_surface == "responses":
+        if "codex" in normalized:
+            return {"reasoning": {"effort": "none"}}
         if "gpt-5" in normalized:
             return {"reasoning": {"effort": "minimal"}}
         if "gpt-oss" in normalized or _is_openai_reasoning_model(model_id):
@@ -492,6 +494,8 @@ def disable_thinking_options(
         return {}
 
     if "gemini" in normalized:
+        return {"reasoning_effort": "none"}
+    if "codex" in normalized:
         return {"reasoning_effort": "none"}
     if "gpt-5" in normalized:
         return {"reasoning_effort": "minimal"}
@@ -595,6 +599,7 @@ def chat_completion_request(
     model_id: str,
     prompt: str,
     disable_thinking: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
     request_body: dict[str, Any] = {
         "model": model_id,
@@ -605,7 +610,7 @@ def chat_completion_request(
             }
         ],
         "temperature": 0,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens if max_tokens is not None else 1024,
         "stream": False,
     }
     if disable_thinking:
@@ -668,6 +673,46 @@ def extract_response_text(payload: Any) -> str:
     raise LLMError("Responses API output did not contain text.")
 
 
+def response_output_contains_reasoning(payload: dict[str, Any]) -> bool:
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return False
+
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "reasoning":
+            return True
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in {
+                "reasoning_text",
+                "reasoning_summary",
+            }:
+                return True
+
+    return False
+
+
+def format_incomplete_response_error(
+    *,
+    reason: str,
+    final_response: dict[str, Any],
+) -> str:
+    message = f"Responses API response was incomplete: {reason}."
+    if reason == "max_output_tokens":
+        message += " Increase `--max-tokens` or reduce the prompt."
+    if response_output_contains_reasoning(final_response):
+        message += (
+            " The response contained reasoning output before final text; if this "
+            "provider cannot disable reasoning on `/responses`, use its "
+            "`/chat/completions` endpoint instead."
+        )
+    return message
+
+
 def responses_completion_request(
     client: httpx.Client,
     url: str,
@@ -676,8 +721,9 @@ def responses_completion_request(
     model_id: str,
     prompt: str,
     disable_thinking: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
-    request_body = {
+    request_body: dict[str, Any] = {
         "model": model_id,
         "input": [
             {
@@ -693,6 +739,8 @@ def responses_completion_request(
         "stream": True,
         "store": False,
     }
+    if max_tokens is not None:
+        request_body["max_output_tokens"] = max_tokens
     if disable_thinking:
         request_body.update(
             disable_thinking_options(
@@ -822,7 +870,12 @@ def responses_completion_request(
                     reason = raw_reason.strip()
             if text:
                 return f"{text}\n\n[Response incomplete: {reason}]"
-            raise LLMError(f"Responses API response was incomplete: {reason}.")
+            raise LLMError(
+                format_incomplete_response_error(
+                    reason=reason,
+                    final_response=final_response,
+                )
+            )
 
         if text:
             return text

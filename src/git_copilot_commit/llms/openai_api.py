@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
 from rich.console import Console
 from rich.panel import Panel
@@ -9,6 +10,9 @@ from rich.table import Table
 from . import core as llm
 
 DEFAULT_SUPPORTED_ENDPOINTS = ("/chat/completions",)
+CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+RESPONSES_ENDPOINT = "/responses"
+MODELS_ENDPOINT = "/models"
 
 console = Console()
 
@@ -32,16 +36,51 @@ def request_headers(
     return headers
 
 
+def endpoint_kind(url: str) -> str | None:
+    path = urlparse(url).path.rstrip("/")
+    if path.endswith(CHAT_COMPLETIONS_ENDPOINT):
+        return "chat_completions"
+    if path.endswith(RESPONSES_ENDPOINT):
+        return "responses"
+    if path.endswith(MODELS_ENDPOINT):
+        return "models"
+    return None
+
+
+def supported_endpoints_for_url(url: str) -> tuple[str, ...]:
+    kind = endpoint_kind(url)
+    if kind == "chat_completions":
+        return (CHAT_COMPLETIONS_ENDPOINT,)
+    if kind == "responses":
+        return (RESPONSES_ENDPOINT,)
+    return DEFAULT_SUPPORTED_ENDPOINTS
+
+
+def completion_api_surface_from_url(url: str) -> str:
+    kind = endpoint_kind(url)
+    if kind in {"chat_completions", "responses"}:
+        return kind
+    raise LLMError(
+        "OpenAI-compatible generation URL must end with "
+        f"`{CHAT_COMPLETIONS_ENDPOINT}` or `{RESPONSES_ENDPOINT}`."
+    )
+
+
 def list_models(
     client,
     *,
     base_url: str,
     api_key: str | None = None,
 ) -> list[Model]:
+    if endpoint_kind(base_url) != "models":
+        raise LLMError(
+            f"OpenAI-compatible models URL must end with `{MODELS_ENDPOINT}`."
+        )
+
     payload = llm.request_json(
         client,
         "GET",
-        f"{base_url}/models",
+        base_url,
         headers=request_headers(api_key),
     )
 
@@ -95,10 +134,22 @@ def ensure_model_ready(
     http_client_config: HttpClientConfig | None = None,
 ) -> Model:
     if model is not None:
-        return default_model(model)
+        return default_model(
+            model,
+            supported_endpoints=supported_endpoints_for_url(base_url),
+        )
 
     if default_model_id is not None:
-        return default_model(default_model_id)
+        return default_model(
+            default_model_id,
+            supported_endpoints=supported_endpoints_for_url(base_url),
+        )
+
+    if endpoint_kind(base_url) != "models":
+        raise LLMError(
+            "OpenAI-compatible provider cannot choose a model automatically from "
+            "a generation URL. Pass `--model` or configure a default model."
+        )
 
     with llm.make_http_client(http_client_config) as client:
         models = list_models(client, base_url=base_url, api_key=api_key)
@@ -121,7 +172,9 @@ def ask(
     provider_label: str = "OpenAI-compatible provider",
     http_client_config: HttpClientConfig | None = None,
     disable_thinking: bool = False,
+    max_tokens: int | None = None,
 ) -> str:
+    api_surface = completion_api_surface_from_url(base_url)
     selected_model = ensure_model_ready(
         base_url=base_url,
         api_key=api_key,
@@ -132,25 +185,26 @@ def ask(
         http_client_config=http_client_config,
     )
 
-    api_surface = llm.infer_api_surface(selected_model)
     with llm.make_http_client(http_client_config) as client:
         if api_surface == "responses":
             return llm.responses_completion_request(
                 client,
-                f"{base_url}/responses",
+                base_url,
                 request_headers(api_key, accept="text/event-stream"),
                 model_id=selected_model.id,
                 prompt=prompt,
                 disable_thinking=disable_thinking,
+                max_tokens=max_tokens,
             )
 
         return llm.chat_completion_request(
             client,
-            f"{base_url}/chat/completions",
+            base_url,
             request_headers(api_key),
             model_id=selected_model.id,
             prompt=prompt,
             disable_thinking=disable_thinking,
+            max_tokens=max_tokens,
         )
 
 
@@ -215,7 +269,10 @@ def show_summary(
                 f"{selected_model.id} ({llm.infer_api_surface(selected_model)})",
             )
     elif default_model_id is not None:
-        table.add_row("Default model", f"{default_model_id} (chat_completions)")
+        table.add_row(
+            "Default model",
+            f"{default_model_id} ({endpoint_kind(base_url) or 'unknown endpoint'})",
+        )
 
     console.print(Panel.fit(table, title="LLM Summary"))
     if warning is not None:
