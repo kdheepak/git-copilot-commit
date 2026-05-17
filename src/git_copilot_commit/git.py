@@ -267,6 +267,20 @@ class GitRepository:
         result = self._run_git_command(["rev-parse", ref])
         return result.stdout.strip()
 
+    def get_tree_sha(self, ref: str = "HEAD") -> str:
+        """Resolve a git ref to its tree SHA."""
+        result = self._run_git_command(["rev-parse", f"{ref}^{{tree}}"])
+        return result.stdout.strip()
+
+    def get_empty_tree_sha(self) -> str:
+        """Create and return the repository's empty tree SHA."""
+        result = self._run_git_command(["mktree"], input_text="")
+        tree_sha = result.stdout.strip()
+        if tree_sha:
+            return tree_sha
+
+        raise GitCommandError("Git command failed: git mktree")
+
     def has_commit(self, ref: str = "HEAD") -> bool:
         """Return whether the provided ref resolves to a commit."""
         result = self._run_git_command(
@@ -530,12 +544,19 @@ class GitRepository:
         use_editor: bool = False,
     ) -> str:
         """Create a commit from an alternate index using plumbing commands only."""
+        has_parent = self.has_commit("HEAD")
+        parent_refs = ("HEAD",) if has_parent else ()
+        base_tree_sha = (
+            self.get_tree_sha("HEAD") if has_parent else self.get_empty_tree_sha()
+        )
+        tree_sha = self.write_tree(env=index.env)
+        if tree_sha == base_tree_sha:
+            raise GitCommandError("No changes to commit")
+
         commit_message = message
         if use_editor:
             commit_message = self.edit_commit_message(message, env=index.env)
 
-        parent_refs = ("HEAD",) if self.has_commit("HEAD") else ()
-        tree_sha = self.write_tree(env=index.env)
         commit_sha = self.create_commit_object(
             tree_sha,
             message=commit_message,
