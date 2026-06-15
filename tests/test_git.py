@@ -1,4 +1,5 @@
 import re
+import subprocess
 
 import pytest  # noqa: F401
 
@@ -272,3 +273,22 @@ def test_parse_status_output_preserves_leading_space_on_first_line(git_repo) -> 
         (" ", "M", "backend/service.py"),
         ("M", " ", "frontend.py"),
     ]
+
+
+def test_run_git_command_uses_utf8_replace_decoding(git_repo_path, monkeypatch) -> None:
+    repo = object.__new__(GitRepository)
+    repo.cwd = git_repo_path
+    repo.repo_path = git_repo_path
+    repo.timeout = 30
+
+    def fake_run(*args, **kwargs):
+        assert kwargs["text"] is True
+        assert kwargs["encoding"] == "utf-8"
+        assert kwargs["errors"] == "replace"
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = repo._run_git_command(["status", "--porcelain"])
+
+    assert result.stdout == "ok"
