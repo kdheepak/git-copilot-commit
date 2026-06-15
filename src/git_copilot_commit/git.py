@@ -134,6 +134,8 @@ class GitRepository:
                 cwd=self.cwd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout,
                 check=True,
             )
@@ -181,6 +183,8 @@ class GitRepository:
                 cwd=self.repo_path,
                 capture_output=capture_output,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout,
                 check=check,
                 env=self._build_env(env),
