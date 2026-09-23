@@ -387,35 +387,35 @@ def test_chat_completion_request_disables_qwen_thinking() -> None:
             {},
             model_id="Qwen/Qwen3.6-35B-A3B",
             prompt="Write a commit message",
-            disable_thinking=True,
+            reasoning_effort="auto",
             max_tokens=256,
         )
 
     assert response == "feat: disable thinking"
 
 
-def test_disable_thinking_options_cover_major_model_families() -> None:
-    assert llm.disable_thinking_options(
+def test_auto_reasoning_options_cover_major_model_families() -> None:
+    assert llm.reasoning_options(
         model_id="gemini-2.5-flash",
         api_surface="chat_completions",
     ) == {"reasoning_effort": "none"}
-    assert llm.disable_thinking_options(
+    assert llm.reasoning_options(
         model_id="gpt-5.4",
         api_surface="chat_completions",
-    ) == {"reasoning_effort": "minimal"}
-    assert llm.disable_thinking_options(
+    ) == {"reasoning_effort": "none"}
+    assert llm.reasoning_options(
         model_id="gpt-5.3-codex",
         api_surface="chat_completions",
     ) == {"reasoning_effort": "none"}
-    assert llm.disable_thinking_options(
+    assert llm.reasoning_options(
         model_id="openai/gpt-oss-120b",
         api_surface="chat_completions",
     ) == {"reasoning_effort": "low"}
-    assert llm.disable_thinking_options(
+    assert llm.reasoning_options(
         model_id="claude-sonnet-4.6",
         api_surface="chat_completions",
     ) == {"thinking": {"type": "disabled"}}
-    assert llm.disable_thinking_options(
+    assert llm.reasoning_options(
         model_id="Qwen/Qwen3.6-35B-A3B",
         api_surface="chat_completions",
     ) == {
@@ -425,11 +425,11 @@ def test_disable_thinking_options_cover_major_model_families() -> None:
             "thinking": False,
         },
     }
-    assert llm.disable_thinking_options(
+    assert llm.reasoning_options(
         model_id="gpt-5.4",
         api_surface="responses",
-    ) == {"reasoning": {"effort": "minimal"}}
-    assert llm.disable_thinking_options(
+    ) == {"reasoning": {"effort": "none"}}
+    assert llm.reasoning_options(
         model_id="gpt-5.3-codex",
         api_surface="responses",
     ) == {"reasoning": {"effort": "none"}}
@@ -438,9 +438,9 @@ def test_disable_thinking_options_cover_major_model_families() -> None:
 def test_responses_completion_request_disables_gpt5_thinking() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         request_payload = json.loads(request.content.decode("utf-8"))
-        assert request_payload["model"] == "gpt-5.4"
+        assert request_payload["model"] == "gpt-5.6-luna"
         assert request_payload["max_output_tokens"] == 2048
-        assert request_payload["reasoning"] == {"effort": "minimal"}
+        assert request_payload["reasoning"] == {"effort": "none"}
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -458,9 +458,9 @@ def test_responses_completion_request_disables_gpt5_thinking() -> None:
             client,
             "https://example.com/v1/responses",
             {},
-            model_id="gpt-5.4",
+            model_id="gpt-5.6-luna",
             prompt="Write a commit message",
-            disable_thinking=True,
+            reasoning_effort="auto",
             max_tokens=2048,
         )
 
@@ -495,7 +495,7 @@ def test_responses_completion_request_reports_reasoning_token_limit() -> None:
                 {},
                 model_id="Qwen/Qwen3.6-35B-A3B",
                 prompt="Write a split commit plan",
-                disable_thinking=True,
+                reasoning_effort="auto",
                 max_tokens=1024,
             )
 

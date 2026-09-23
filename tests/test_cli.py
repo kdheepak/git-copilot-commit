@@ -154,7 +154,7 @@ def test_generate_commit_message_for_status_normalizes_model_prefix(
     assert message == "feat: add example"
     assert mock_ask.call_count == 1
     assert mock_ask.call_args.kwargs["model"] == "gpt-5.4"
-    assert mock_ask.call_args.kwargs["disable_thinking"] is True
+    assert mock_ask.call_args.kwargs["reasoning_effort"] == "auto"
     assert mock_ask.call_args.kwargs["max_tokens"] == 1024
     rendered_prompt = mock_ask.call_args.args[0]
     assert "system prompt" in rendered_prompt
@@ -183,12 +183,12 @@ def test_generate_commit_message_for_status_retries_without_diff_on_context_over
     monkeypatch.setattr(cli, "load_system_prompt", Mock(return_value="system prompt"))
     monkeypatch.setattr(cli.providers, "ask", mock_ask)
 
-    message = generate_commit_message_for_status(status)
+    message = generate_commit_message_for_status(status, reasoning_effort="high")
 
     assert message == "feat: add example"
     assert mock_ask.call_count == 2
-    assert mock_ask.call_args_list[0].kwargs["disable_thinking"] is True
-    assert mock_ask.call_args_list[1].kwargs["disable_thinking"] is True
+    assert mock_ask.call_args_list[0].kwargs["reasoning_effort"] == "high"
+    assert mock_ask.call_args_list[1].kwargs["reasoning_effort"] == "high"
     assert mock_ask.call_args_list[0].kwargs["max_tokens"] == 1024
     assert mock_ask.call_args_list[1].kwargs["max_tokens"] == 1024
     first_prompt = mock_ask.call_args_list[0].args[0]
@@ -253,12 +253,12 @@ def test_request_split_commit_plan_retries_without_patches_on_context_overflow(
     monkeypatch.setattr(cli, "load_named_prompt", Mock(return_value="system prompt"))
     monkeypatch.setattr(cli, "ask_llm_with_system_prompt", mock_ask)
 
-    plan = cli.request_split_commit_plan(status, patch_units)
+    plan = cli.request_split_commit_plan(status, patch_units, reasoning_effort="xhigh")
 
     assert [commit.unit_ids for commit in plan.commits] == [("u1",), ("u2",)]
     assert mock_ask.call_count == 2
-    assert mock_ask.call_args_list[0].kwargs["disable_thinking"] is True
-    assert mock_ask.call_args_list[1].kwargs["disable_thinking"] is True
+    assert mock_ask.call_args_list[0].kwargs["reasoning_effort"] == "xhigh"
+    assert mock_ask.call_args_list[1].kwargs["reasoning_effort"] == "xhigh"
     assert mock_ask.call_args_list[0].kwargs["max_tokens"] == 1024
     assert mock_ask.call_args_list[1].kwargs["max_tokens"] == 1024
     first_prompt = mock_ask.call_args_list[0].args[1]
@@ -794,14 +794,14 @@ def test_commit_command_supports_openai_provider_without_copilot_auth(
             api_key=None,
         )
     )
-    assert request_commit_message.call_args.kwargs["disable_thinking"] is True
+    assert request_commit_message.call_args.kwargs["reasoning_effort"] == "auto"
     assert request_commit_message.call_args.kwargs["max_tokens"] == 1024
     assert repo.get_recent_commits(limit=1)[0][1] == (
         "chore: use openai-compatible provider"
     )
 
 
-def test_commit_command_can_enable_thinking(
+def test_commit_command_accepts_reasoning_effort(
     git_repo_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -833,12 +833,13 @@ def test_commit_command_can_enable_thinking(
             "commit",
             "--all",
             "--yes",
-            "--enable-thinking",
+            "--reasoning-effort",
+            "high",
         ],
     )
 
     assert result.exit_code == 0
-    assert request_commit_message.call_args.kwargs["disable_thinking"] is False
+    assert request_commit_message.call_args.kwargs["reasoning_effort"] == "high"
     assert request_commit_message.call_args.kwargs["max_tokens"] == 1024
 
 
@@ -1336,7 +1337,7 @@ def test_handle_split_commit_flow_auto_mode_always_requests_split_planning(
         context="",
         provider_config=None,
         http_client_config=None,
-        disable_thinking=True,
+        reasoning_effort="auto",
         max_tokens=1024,
     )
 
@@ -1474,7 +1475,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
         context="",
         provider_config=None,
         http_client_config=None,
-        disable_thinking=True,
+        reasoning_effort="auto",
         max_tokens=1024,
     )
     request_messages.assert_called_once_with(
@@ -1484,7 +1485,7 @@ def test_handle_split_commit_flow_auto_mode_can_trigger_split_planning(
         context="",
         provider_config=None,
         http_client_config=None,
-        disable_thinking=True,
+        reasoning_effort="auto",
         max_tokens=1024,
     )
     display_plan.assert_called_once_with(prepared_commits)
@@ -1554,7 +1555,7 @@ def test_handle_split_commit_flow_split_limit_can_trigger_split_planning(
         context="",
         provider_config=None,
         http_client_config=None,
-        disable_thinking=True,
+        reasoning_effort="auto",
         max_tokens=1024,
     )
     execute_plan.assert_called_once_with(repo, prepared_commits, yes=False)
@@ -1766,6 +1767,6 @@ def test_handle_split_commit_flow_split_limit_does_not_reject_fewer_patch_units(
         context="",
         provider_config=None,
         http_client_config=None,
-        disable_thinking=True,
+        reasoning_effort="auto",
         max_tokens=1024,
     )

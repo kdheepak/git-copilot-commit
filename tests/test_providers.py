@@ -125,7 +125,7 @@ def test_ask_openai_provider_uses_chat_completions(
             assert request_payload["model"] == "openai/gpt-oss-120b"
             assert request_payload["messages"][0]["content"] == "Write a commit message"
             assert request_payload["max_tokens"] == 1024
-            assert "reasoning_effort" not in request_payload
+            assert request_payload["reasoning_effort"] == "high"
             assert "chat_template_kwargs" not in request_payload
             return httpx.Response(
                 200,
@@ -155,6 +155,7 @@ def test_ask_openai_provider_uses_chat_completions(
             base_url="http://127.0.0.1:11434/v1/chat/completions",
         ),
         model="openai/gpt-oss-120b",
+        reasoning_effort="high",
     )
 
     assert response == "feat: add local llm support"
@@ -201,7 +202,7 @@ def test_ask_openai_provider_can_disable_thinking(
             base_url="http://127.0.0.1:11434/v1/chat/completions",
         ),
         model="Qwen/Qwen3.6-35B-A3B",
-        disable_thinking=True,
+        reasoning_effort="auto",
         max_tokens=4096,
     )
 
@@ -218,6 +219,7 @@ def test_ask_openai_provider_uses_responses_endpoint_from_base_url(
             request_payload = json.loads(request.content.decode("utf-8"))
             assert request_payload["model"] == "gpt-5.4"
             assert request_payload["max_output_tokens"] == 1024
+            assert request_payload["reasoning"] == {"effort": "max"}
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
@@ -249,6 +251,7 @@ def test_ask_openai_provider_uses_responses_endpoint_from_base_url(
             base_url="http://127.0.0.1:11434/v1/responses",
         ),
         model="gpt-5.4",
+        reasoning_effort="max",
         max_tokens=1024,
     )
 
