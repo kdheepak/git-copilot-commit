@@ -505,7 +505,7 @@ def complete_text_prompt(
     *,
     model: Model,
     prompt: str,
-    disable_thinking: bool = False,
+    reasoning_effort="auto",
     max_tokens: int | None = None,
 ) -> str:
     api_surface = llm.infer_api_surface(model)
@@ -518,7 +518,7 @@ def complete_text_prompt(
             ),
             model_id=model.id,
             prompt=prompt,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
     if api_surface == "responses":
@@ -532,7 +532,7 @@ def complete_text_prompt(
             ),
             model_id=model.id,
             prompt=prompt,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
 
@@ -788,7 +788,7 @@ def ask(
     default_model: str | None = None,
     configured_default_model_path: Path | None = None,
     http_client_config: HttpClientConfig | None = None,
-    disable_thinking: bool = False,
+    reasoning_effort="auto",
     max_tokens: int | None = None,
 ) -> str:
     def run(client) -> str:
@@ -806,7 +806,7 @@ def ask(
             credentials,
             model=selected_model,
             prompt=prompt,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
 

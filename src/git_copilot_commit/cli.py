@@ -7,6 +7,7 @@ from pathlib import Path
 import os
 import re
 import sys
+import typing
 from typing import Annotated, Sequence
 
 import cyclopts
@@ -371,7 +372,7 @@ def ask_llm_with_system_prompt(
     model: str | None = None,
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = True,
+    reasoning_effort="auto",
     max_tokens: int = 1024,
 ) -> str:
     """Send a prepared prompt to the selected LLM provider."""
@@ -388,7 +389,7 @@ def ask_llm_with_system_prompt(
         provider_config=provider_config,
         model=normalize_model_name(model),
         http_client_config=http_client_config,
-        disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
         max_tokens=max_tokens,
     )
 
@@ -398,7 +399,7 @@ def generate_commit_message_for_prompt(
     model: str | None = None,
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = True,
+    reasoning_effort="auto",
     max_tokens: int = 1024,
 ) -> str:
     """Generate a conventional commit message from a prepared prompt."""
@@ -408,7 +409,7 @@ def generate_commit_message_for_prompt(
         model=model,
         provider_config=provider_config,
         http_client_config=http_client_config,
-        disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
         max_tokens=max_tokens,
     )
 
@@ -443,7 +444,7 @@ def generate_commit_message_for_status(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = True,
+    reasoning_effort="auto",
     max_tokens: int = 1024,
 ) -> str:
     """Generate a commit message for a staged status snapshot."""
@@ -454,7 +455,7 @@ def generate_commit_message_for_status(
             model=model,
             provider_config=provider_config,
             http_client_config=http_client_config,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
     except llm.LLMError as exc:
@@ -474,7 +475,7 @@ def generate_commit_message_for_status(
         model=model,
         provider_config=provider_config,
         http_client_config=http_client_config,
-        disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
         max_tokens=max_tokens,
     )
 
@@ -563,7 +564,7 @@ def request_commit_message(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = True,
+    reasoning_effort="auto",
     max_tokens: int = 1024,
 ) -> str:
     """Request a commit message for the provided staged state."""
@@ -577,7 +578,7 @@ def request_commit_message(
                 context=context,
                 provider_config=provider_config,
                 http_client_config=http_client_config,
-                disable_thinking=disable_thinking,
+                reasoning_effort=reasoning_effort,
                 max_tokens=max_tokens,
             )
     except llm.LLMError as exc:
@@ -594,7 +595,7 @@ def request_split_commit_plan(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = True,
+    reasoning_effort="auto",
     max_tokens: int = 1024,
 ) -> SplitCommitPlan:
     """Request and validate a split-commit plan for the staged patch units."""
@@ -616,7 +617,7 @@ def request_split_commit_plan(
                 model=model,
                 provider_config=provider_config,
                 http_client_config=http_client_config,
-                disable_thinking=disable_thinking,
+                reasoning_effort=reasoning_effort,
                 max_tokens=max_tokens,
             )
     except llm.LLMError as exc:
@@ -651,7 +652,7 @@ def request_split_commit_plan(
                 model=model,
                 provider_config=provider_config,
                 http_client_config=http_client_config,
-                disable_thinking=disable_thinking,
+                reasoning_effort=reasoning_effort,
                 max_tokens=max_tokens,
             )
     except llm.LLMError as exc:
@@ -672,7 +673,7 @@ def request_split_commit_messages(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = True,
+    reasoning_effort="auto",
     max_tokens: int = 1024,
 ) -> list[PreparedSplitCommit]:
     """Generate commit messages for each planned split-commit group."""
@@ -691,7 +692,7 @@ def request_split_commit_messages(
                     context=context,
                     provider_config=provider_config,
                     http_client_config=http_client_config,
-                    disable_thinking=disable_thinking,
+                    reasoning_effort=reasoning_effort,
                     max_tokens=max_tokens,
                 )
 
@@ -886,7 +887,7 @@ def handle_single_commit_flow(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = True,
+    reasoning_effort="auto",
     max_tokens: int = 1024,
 ) -> None:
     """Generate, display, and execute the single-commit flow."""
@@ -896,7 +897,7 @@ def handle_single_commit_flow(
         context=context,
         provider_config=provider_config,
         http_client_config=http_client_config,
-        disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
         max_tokens=max_tokens,
     )
     display_commit_message(commit_message)
@@ -915,7 +916,7 @@ def handle_split_commit_flow(
     context: str = "",
     provider_config: providers.ProviderConfig | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = True,
+    reasoning_effort="auto",
     max_tokens: int = 1024,
 ) -> None:
     """Generate, display, and execute the split-commit flow."""
@@ -935,7 +936,7 @@ def handle_split_commit_flow(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
         return
@@ -952,7 +953,7 @@ def handle_split_commit_flow(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
         return
@@ -976,7 +977,7 @@ def handle_split_commit_flow(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
     except SplitPlanningError as exc:
@@ -992,7 +993,7 @@ def handle_split_commit_flow(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
         return
@@ -1011,7 +1012,7 @@ def handle_split_commit_flow(
         context=context,
         provider_config=provider_config,
         http_client_config=http_client_config,
-        disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
         max_tokens=max_tokens,
     )
     prepared_commits = order_prepared_split_commits(prepared_commits)
@@ -1183,16 +1184,18 @@ def commit(
             help="Optional user-provided context to guide commit message",
         ),
     ] = "",
-    disable_thinking: Annotated[
-        bool,
+    reasoning_effort: Annotated[
+        typing.Literal[
+            "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"
+        ],
         cyclopts.Parameter(
-            name="--disable-thinking",
-            negative="--enable-thinking",
+            name="--reasoning-effort",
             help=(
-                "Disable or minimize reasoning/thinking tokens for commit-message requests."
+                "Reasoning effort. Auto disables or minimizes thinking for the model. "
+                "Other values are sent unchanged; model support varies."
             ),
         ),
-    ] = True,
+    ] = "auto",
     max_tokens: Annotated[
         int,
         cyclopts.Parameter(
@@ -1274,7 +1277,7 @@ def commit(
             context=context,
             provider_config=provider_config,
             http_client_config=http_client_config,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
         return
@@ -1287,7 +1290,7 @@ def commit(
         context=context,
         provider_config=provider_config,
         http_client_config=http_client_config,
-        disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
         max_tokens=max_tokens,
     )
 

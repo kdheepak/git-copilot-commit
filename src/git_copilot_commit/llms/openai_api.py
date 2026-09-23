@@ -171,7 +171,7 @@ def ask(
     configured_default_model_path: Path | None = None,
     provider_label: str = "OpenAI-compatible provider",
     http_client_config: HttpClientConfig | None = None,
-    disable_thinking: bool = False,
+    reasoning_effort="auto",
     max_tokens: int | None = None,
 ) -> str:
     api_surface = completion_api_surface_from_url(base_url)
@@ -193,7 +193,7 @@ def ask(
                 request_headers(api_key, accept="text/event-stream"),
                 model_id=selected_model.id,
                 prompt=prompt,
-                disable_thinking=disable_thinking,
+                reasoning_effort=reasoning_effort,
                 max_tokens=max_tokens,
             )
 
@@ -203,7 +203,7 @@ def ask(
             request_headers(api_key),
             model_id=selected_model.id,
             prompt=prompt,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
 

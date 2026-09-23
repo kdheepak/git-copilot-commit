@@ -311,7 +311,7 @@ def ask(
     provider_config: ProviderConfig | None = None,
     model: str | None = None,
     http_client_config: llm.HttpClientConfig | None = None,
-    disable_thinking: bool = False,
+    reasoning_effort="auto",
     max_tokens: int | None = None,
 ) -> str:
     resolved_provider = provider_config or resolve_provider_config()
@@ -324,7 +324,7 @@ def ask(
             default_model=default_model,
             configured_default_model_path=config_file,
             http_client_config=http_client_config,
-            disable_thinking=disable_thinking,
+            reasoning_effort=reasoning_effort,
             max_tokens=max_tokens,
         )
 
@@ -340,7 +340,7 @@ def ask(
         configured_default_model_path=config_file,
         provider_label=resolved_provider.display_name,
         http_client_config=http_client_config,
-        disable_thinking=disable_thinking,
+        reasoning_effort=reasoning_effort,
         max_tokens=max_tokens,
     )
 

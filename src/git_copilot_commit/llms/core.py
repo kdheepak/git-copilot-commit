@@ -469,15 +469,21 @@ def _uses_chat_template_thinking_controls(model_id: str) -> bool:
     )
 
 
-def disable_thinking_options(
+def reasoning_options(
     *,
     model_id: str,
     api_surface: str,
+    reasoning_effort="auto",
 ) -> dict[str, Any]:
+    if reasoning_effort != "auto":
+        if api_surface == "responses":
+            return {"reasoning": {"effort": reasoning_effort}}
+        return {"reasoning_effort": reasoning_effort}
+
     normalized = model_id.lower()
 
     if api_surface == "responses":
-        if "codex" in normalized:
+        if "codex" in normalized or "gpt-5." in normalized:
             return {"reasoning": {"effort": "none"}}
         if "gpt-5" in normalized:
             return {"reasoning": {"effort": "minimal"}}
@@ -495,7 +501,7 @@ def disable_thinking_options(
 
     if "gemini" in normalized:
         return {"reasoning_effort": "none"}
-    if "codex" in normalized:
+    if "codex" in normalized or "gpt-5." in normalized:
         return {"reasoning_effort": "none"}
     if "gpt-5" in normalized:
         return {"reasoning_effort": "minimal"}
@@ -598,7 +604,7 @@ def chat_completion_request(
     *,
     model_id: str,
     prompt: str,
-    disable_thinking: bool = False,
+    reasoning_effort="auto",
     max_tokens: int | None = None,
 ) -> str:
     request_body: dict[str, Any] = {
@@ -613,13 +619,13 @@ def chat_completion_request(
         "max_tokens": max_tokens if max_tokens is not None else 1024,
         "stream": False,
     }
-    if disable_thinking:
-        request_body.update(
-            disable_thinking_options(
-                model_id=model_id,
-                api_surface="chat_completions",
-            )
+    request_body.update(
+        reasoning_options(
+            model_id=model_id,
+            api_surface="chat_completions",
+            reasoning_effort=reasoning_effort,
         )
+    )
 
     payload = request_json(
         client,
@@ -720,7 +726,7 @@ def responses_completion_request(
     *,
     model_id: str,
     prompt: str,
-    disable_thinking: bool = False,
+    reasoning_effort="auto",
     max_tokens: int | None = None,
 ) -> str:
     request_body: dict[str, Any] = {
@@ -741,13 +747,13 @@ def responses_completion_request(
     }
     if max_tokens is not None:
         request_body["max_output_tokens"] = max_tokens
-    if disable_thinking:
-        request_body.update(
-            disable_thinking_options(
-                model_id=model_id,
-                api_surface="responses",
-            )
+    request_body.update(
+        reasoning_options(
+            model_id=model_id,
+            api_surface="responses",
+            reasoning_effort=reasoning_effort,
         )
+    )
 
     for attempt in range(HTTP_RETRY_ATTEMPTS):
         text_parts: list[str] = []
